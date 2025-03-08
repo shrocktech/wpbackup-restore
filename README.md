@@ -20,7 +20,7 @@ Follow these steps to set up the WPBACKUP-RESTORE tools:
 1. **Clone the Repository**:
    Copy and paste the following command to clone the repository to `/opt/WPBACKUP-RESTORE`:
    ```bash
-   git clone https://github.com/your-username/WPBACKUP-RESTORE.git /opt/WPBACKUP-RESTORE
+   git clone https://github.com/shrocktech/wpbackup-restore.git /opt/WPBACKUP-RESTORE
    cd /opt/WPBACKUP-RESTORE
    ```
 
@@ -53,7 +53,7 @@ Follow these steps to set up the WPBACKUP-RESTORE tools:
 
      [IDriveBackup]
      type = alias
-     remote = IDrive:contabosites/backups
+     remote = IDrive:directory/backups
      ```
    - Save the file (Ctrl+O, Enter, Ctrl+X) and exit.
 
