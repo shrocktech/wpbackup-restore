@@ -4,6 +4,9 @@
 
 set -e
 
+# Define the script directory
+SCRIPT_DIR="/opt/wpbackup-restore"
+
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root."
@@ -33,39 +36,28 @@ if [ -f "$RCLONE_CONF_FILE" ]; then
     echo "Rclone configuration file already exists at $RCLONE_CONF_FILE. Skipping copy."
 else
     mkdir -p "$RCLONE_CONF_DIR"
-    cp rclone.conf.example "$RCLONE_CONF_FILE"
+    cp "$SCRIPT_DIR/rclone.conf.example" "$RCLONE_CONF_FILE"
     echo "Rclone configuration file copied to $RCLONE_CONF_FILE."
-    echo "Please edit $RCLONE_CONF_FILE with your S3-compatible storage credentials (e.g., replace placeholders with your access keys, secret key, and endpoint)."
-    echo "Example configuration for an S3-compatible provider:"
-    echo "  [S3Provider]"
-    echo "  type = s3"
-    echo "  provider = Other"
-    echo "  env_auth = false"
-    echo "  access_key_id = your_access_key"
-    echo "  secret_access_key = your_secret_key"
-    echo "  endpoint = your_endpoint_url"
-    echo "  no_check_bucket = true"
-    echo "  [S3Backup]"
-    echo "  type = alias"
-    echo "  remote = S3Provider:your-backup-directory"
-    echo "Use 'nano $RCLONE_CONF_FILE' to make these changes."
+    echo "Please edit $RCLONE_CONF_FILE with your S3-compatible storage credentials."
 fi
 
 # 3. Install scripts
 INSTALL_DIR="/usr/local/bin"
-echo "Listing files in current directory for debugging:"
-ls -l
+echo "Listing files in $SCRIPT_DIR for debugging:"
+ls -l "$SCRIPT_DIR"
+
 for script in wpbackup wprestore update; do
-    if [ ! -f "${script}.sh" ]; then
-        echo "Error: ${script}.sh not found in the repository."
+    if [ ! -f "$SCRIPT_DIR/${script}.sh" ]; then
+        echo "Error: ${script}.sh not found in $SCRIPT_DIR."
         exit 1
     fi
+
     if [ "$script" = "update" ]; then
-        cp "${script}.sh" "$INSTALL_DIR/update-wpscripts"
+        cp "$SCRIPT_DIR/${script}.sh" "$INSTALL_DIR/update-wpscripts"
         chmod +x "$INSTALL_DIR/update-wpscripts"
         echo "Installed update-wpscripts to $INSTALL_DIR/update-wpscripts."
     else
-        cp "${script}.sh" "$INSTALL_DIR/$script"
+        cp "$SCRIPT_DIR/${script}.sh" "$INSTALL_DIR/$script"
         chmod +x "$INSTALL_DIR/$script"
         echo "Installed $script to $INSTALL_DIR/$script."
     fi
@@ -74,6 +66,7 @@ done
 # 4. Set cron job for daily backups
 CRON_LOG="/var/log/wpbackup.log"
 CRON_JOB="0 2 * * * /usr/local/bin/wpbackup >> $CRON_LOG 2>&1"
+
 if crontab -l 2>/dev/null | grep -q "/usr/local/bin/wpbackup"; then
     echo "Cron job already exists for wpbackup. Skipping."
 else
@@ -83,6 +76,6 @@ fi
 
 echo "Installation completed successfully."
 echo "Next steps:"
-echo "1. Edit $RCLONE_CONF_FILE with your S3-compatible storage credentials using 'nano $RCLONE_CONF_FILE'."
-echo "2. Test the backup script: wpbackup -dryrun"
-echo "3. Test the restore script: wprestore -dryrun"
+echo "1. Edit $RCLONE_CONF_FILE with your S3-compatible storage credentials."
+echo "2. Test the backup script: wpbackup --dry-run"
+echo "3. Test the restore script: wprestore --dry-run"
