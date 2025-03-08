@@ -4,7 +4,8 @@ A collection of scripts to backup and restore WordPress sites using Rclone and S
 
 ## Features
 - **Backup**: Backs up WordPress sites (database, `wp-content`, `wp-config.php`) and uploads to S3-compatible storage.
-- **Restore**: Restores WordPress sites from backups with database and file options.
+- **Local Backup**: Keeps recent backups locally for faster restores.
+- **Restore**: Restores WordPress sites from either local or S3 backups with database and file options.
 - **Retention Policy**: Manages backup retention (7 days daily, 28 days weekly, 90 days monthly).
 - **Easy Updates**: Update scripts with a single command.
 
@@ -53,8 +54,19 @@ Save (Ctrl+O, Enter, Ctrl+X) and exit.
   - Full backup: `wpbackup`
   - Dry run: `wpbackup -dryrun`
 - **Restore a Site**:
-  - Full restore: `wprestore`
+  - Interactive restore: `wprestore`
   - Dry run: `wprestore -dryrun`
+
+## Local Backups
+- **Storage Location**: Local backups are stored in `/var/backups/wordpress_backups/`
+- **Retention**: Only the most recent backup (last 24 hours) is kept locally
+- **Custom Path**: Override with `LOCAL_BACKUP_DIR=/custom/path wpbackup`
+
+## Restore Options
+When restoring, you can choose from:
+1. **Local Backup Source** (default): Faster restore from local backups
+2. **Remote S3 Backup**: Useful when local backups aren't available
+3. **Database Only or Full Restore**: Choose whether to restore just the database or the complete site
 
 ## Cron Job
 A cron job is set to run `wpbackup` daily at 2:00 AM, logging to `/var/log/wpbackup.log`.
@@ -75,16 +87,19 @@ update-wpscripts
 ## Configuration Options
 - **Backup Directory**: Defaults to `/var/www`. Override with: `BASE_DIR=/custom/path wpbackup`
 - **Restore Directory**: Defaults to `/var/www`. Override with: `WP_BASE_PATH=/custom/path wprestore`
-- **Logs**: `/var/log/wpbackup.log` (backup), `/var/log/wprestore.log` (restore)
+- **Local Backup Storage**: Defaults to `/var/backups/wordpress_backups`. Override with: `LOCAL_BACKUP_DIR=/custom/path wpbackup` or `LOCAL_BACKUP_DIR=/custom/path wprestore`
+- **Logs**: Per-site logs are included in each backup archive
 
 ## Notes
 - **Security**: Do not commit `/root/.config/rclone/rclone.conf`.
 - **Restore Verification**: After restoring, verify at `https://<domain>` and check `wp-config.php` for table prefix issues.
+- **Database Format**: Database files are named in the format `domainprefix_db_YYYY-MM-DD.sql` for compatibility.
 
 ## Troubleshooting
-- Check logs if a script fails: `cat /var/log/wpbackup.log` or `cat /var/log/wprestore.log`
+- Check backup logs in the backup archives or cron job output
 - Ensure dependencies and Rclone are configured correctly.
 - If the tarball download fails, verify the URL or internet connection.
+- To remove a restoration directory: `rm -rf /var/www/domainname/wprestore_MMDDYYYY`
 
 ## Contributing
 Make changes locally and upload to a new GitHub repository if desired.
