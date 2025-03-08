@@ -29,7 +29,13 @@ check_disk_space() {
     
     # Get backup file size
     echo "Checking backup file size..." | tee -a "$LOG_FILE"
-    local backup_size_mb=$(rclone size "$FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP" --json | grep -o '"bytes":[0-9]*' | grep -o '[0-9]*')
+    
+    if [ "$USE_LOCAL_BACKUP" = true ]; then
+        local backup_size_mb=$(du -b "$LOCAL_BACKUP_FILE" | cut -f1)
+    else
+        local backup_size_mb=$(rclone size "$FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP" --json | grep -o '"bytes":[0-9]*' | grep -o '[0-9]*')
+    fi
+    
     local backup_size_gb=$(echo "scale=2; $backup_size_mb/1024/1024/1024" | bc)
     local overhead_gb=1  # 1GB overhead for extraction and processing
     local required_space=$(echo "scale=0; $backup_size_gb+$overhead_gb+0.5" | bc | cut -d. -f1)
@@ -141,8 +147,12 @@ fi
 ensure_pv_installed
 
 # ---------------------------
-# Step 2: Configure S3 Alias
+# Step 2: Configure Backup Sources
 # ---------------------------
+# Set local backup directory
+LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-/var/backups/wordpress_backups}"
+
+# Configure S3 backup source
 DEFAULT_RCLONE_CONF="/root/.config/rclone/rclone.conf"
 if [ ! -f "$DEFAULT_RCLONE_CONF" ]; then
     echo "Default rclone configuration not found at $DEFAULT_RCLONE_CONF"
@@ -251,28 +261,94 @@ echo "✓ S3 Connection: Verified" | tee -a "$LOG_FILE"
 echo "----------------------------------------" | tee -a "$LOG_FILE"
 
 # ---------------------------
-# Step 4: Find Latest Backup Directory
+# Step 4: Choose Backup Source (Local or Remote)
 # ---------------------------
-echo "Looking for the latest backup directory in $FULL_REMOTE_PATH..." | tee -a "$LOG_FILE"
-LATEST_DIR=$(rclone lsf "$FULL_REMOTE_PATH" --dirs-only | sort -r | head -n 1)
+echo "Please choose the backup source:"
+echo "1) Local backup (from $LOCAL_BACKUP_DIR)"
+echo "2) Remote S3 backup"
+echo ""
+echo "Default: Option 1 will be selected in 15 seconds..."
 
-if [ -z "$LATEST_DIR" ]; then
-    echo "Error: No backup directories found in the S3 bucket. Please check your rclone configuration." | tee -a "$LOG_FILE"
-    exit 1
+read -t 15 -p "Enter your choice (1-2): " BACKUP_SOURCE_CHOICE || true
+
+if [ -z "$BACKUP_SOURCE_CHOICE" ]; then
+    echo "No input received, defaulting to local backup"
+    BACKUP_SOURCE_CHOICE=1
 fi
-echo "Latest backup directory found: $LATEST_DIR" | tee -a "$LOG_FILE"
+
+case "$BACKUP_SOURCE_CHOICE" in
+    1)
+        echo "Using local backup..." | tee -a "$LOG_FILE"
+        USE_LOCAL_BACKUP=true
+        
+        # Check if local backup directory exists
+        if [ ! -d "$LOCAL_BACKUP_DIR" ]; then
+            echo "Error: Local backup directory not found at $LOCAL_BACKUP_DIR" | tee -a "$LOG_FILE"
+            echo "Would you like to switch to remote S3 backup? (yes/no)"
+            read -p "Switch to S3 backup? (yes/no): " SWITCH_TO_S3
+            
+            if [[ "$SWITCH_TO_S3" == "yes" ]]; then
+                USE_LOCAL_BACKUP=false
+                echo "Switching to remote S3 backup..." | tee -a "$LOG_FILE"
+            else
+                echo "Exiting as local backup directory does not exist." | tee -a "$LOG_FILE"
+                exit 1
+            fi
+        fi
+        
+        if [ "$USE_LOCAL_BACKUP" = true ]; then
+            # Find the latest local backup for the domain
+            echo "Looking for the latest local backup for '$DOMAIN' in $LOCAL_BACKUP_DIR..." | tee -a "$LOG_FILE"
+            LOCAL_BACKUP_FILE=$(find "$LOCAL_BACKUP_DIR" -name "${DOMAIN}*.tar.gz" -type f -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+            
+            if [ -z "$LOCAL_BACKUP_FILE" ]; then
+                echo "Error: No local backup files found for $DOMAIN in $LOCAL_BACKUP_DIR." | tee -a "$LOG_FILE"
+                echo "Would you like to switch to remote S3 backup? (yes/no)"
+                read -p "Switch to S3 backup? (yes/no): " SWITCH_TO_S3
+                
+                if [[ "$SWITCH_TO_S3" == "yes" ]]; then
+                    USE_LOCAL_BACKUP=false
+                    echo "Switching to remote S3 backup..." | tee -a "$LOG_FILE"
+                else
+                    echo "Exiting as no local backup file was found." | tee -a "$LOG_FILE"
+                    exit 1
+                fi
+            else
+                echo "Found local backup file: $LOCAL_BACKUP_FILE" | tee -a "$LOG_FILE"
+                LATEST_BACKUP=$(basename "$LOCAL_BACKUP_FILE")
+            fi
+        fi
+        ;;
+    *)
+        echo "Using remote S3 backup..." | tee -a "$LOG_FILE"
+        USE_LOCAL_BACKUP=false
+        ;;
+esac
 
 # ---------------------------
-# Step 5: Find Backup File for the Domain
+# Step 5: Find Backup Files
 # ---------------------------
-echo "Looking for the latest backup file for '$DOMAIN' in $FULL_REMOTE_PATH/$LATEST_DIR/..." | tee -a "$LOG_FILE"
-LATEST_BACKUP=$(rclone lsf "$FULL_REMOTE_PATH/$LATEST_DIR/" --include "${DOMAIN}*" | sort -r | head -n 1)
+if [ "$USE_LOCAL_BACKUP" = false ]; then
+    # Find latest backup directory in S3
+    echo "Looking for the latest backup directory in $FULL_REMOTE_PATH..." | tee -a "$LOG_FILE"
+    LATEST_DIR=$(rclone lsf "$FULL_REMOTE_PATH" --dirs-only | sort -r | head -n 1)
 
-if [ -z "$LATEST_BACKUP" ]; then
-    echo "Error: No backup files found for $DOMAIN." | tee -a "$LOG_FILE"
-    exit 1
+    if [ -z "$LATEST_DIR" ]; then
+        echo "Error: No backup directories found in the S3 bucket. Please check your configuration." | tee -a "$LOG_FILE"
+        exit 1
+    fi
+    echo "Latest backup directory found: $LATEST_DIR" | tee -a "$LOG_FILE"
+
+    # Find backup file for the domain
+    echo "Looking for the latest backup file for '$DOMAIN' in $FULL_REMOTE_PATH/$LATEST_DIR/..." | tee -a "$LOG_FILE"
+    LATEST_BACKUP=$(rclone lsf "$FULL_REMOTE_PATH/$LATEST_DIR/" --include "${DOMAIN}*" | sort -r | head -n 1)
+
+    if [ -z "$LATEST_BACKUP" ]; then
+        echo "Error: No backup files found for $DOMAIN." | tee -a "$LOG_FILE"
+        exit 1
+    fi
+    echo "Latest backup file found: $LATEST_BACKUP" | tee -a "$LOG_FILE"
 fi
-echo "Latest backup file found: $LATEST_BACKUP" | tee -a "$LOG_FILE"
 
 # Prompt for restore type
 echo "Please choose restore type:"
@@ -307,7 +383,7 @@ case "$RESTORE_CHOICE" in
 esac
 
 # ---------------------------
-# Step 6: Check Space and Download the Backup
+# Step 6: Check Space and Download/Copy the Backup
 # ---------------------------
 if [ "$DRYRUN" = false ]; then
     check_disk_space
@@ -315,14 +391,21 @@ fi
 TEMP_DIR=$(mktemp -d)
 
 if [ "$DRYRUN" = false ]; then
-    echo "Downloading the backup file from $FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP..." | tee -a "$LOG_FILE"
-    if ! rclone copy "$FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP" "$TEMP_DIR" --progress >/dev/null 2>&1; then
-        echo "Error: Failed to download backup file." | tee -a "$LOG_FILE"
-        exit 1
+    if [ "$USE_LOCAL_BACKUP" = true ]; then
+        echo "Copying the local backup file to temporary directory..." | tee -a "$LOG_FILE"
+        cp "$LOCAL_BACKUP_FILE" "$TEMP_DIR/"
+        echo "✓ Local copy completed" | tee -a "$LOG_FILE"
+        ARCHIVE_FILE="$TEMP_DIR/$(basename "$LOCAL_BACKUP_FILE")"
+    else
+        echo "Downloading the backup file from $FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP..." | tee -a "$LOG_FILE"
+        if ! rclone copy "$FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP" "$TEMP_DIR" --progress >/dev/null 2>&1; then
+            echo "Error: Failed to download backup file." | tee -a "$LOG_FILE"
+            exit 1
+        fi
+        echo "✓ Download completed" | tee -a "$LOG_FILE"
+        ARCHIVE_FILE="$TEMP_DIR/$LATEST_BACKUP"
     fi
-    echo "✓ Download completed" | tee -a "$LOG_FILE"
     
-    ARCHIVE_FILE="$TEMP_DIR/$LATEST_BACKUP"
     echo "Extracting $ARCHIVE_FILE..." | tee -a "$LOG_FILE"
     if ! tar -xzvf "$ARCHIVE_FILE" -C "$TEMP_DIR"; then
         echo "Error: Failed to extract the backup archive." | tee -a "$LOG_FILE"
@@ -353,9 +436,14 @@ if [ "$DRYRUN" = false ]; then
     DB_SIZE=$(du -sh "$DB_BACKUP_FILE" | cut -f1)
     echo "✓ Database backup found ($DB_SIZE)" | tee -a "$LOG_FILE"
 else
-    echo "[Dry Run] Would download and extract backup file: $FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP" | tee -a "$LOG_FILE"
+    if [ "$USE_LOCAL_BACKUP" = true ]; then
+        echo "[Dry Run] Would copy and extract local backup file: $LOCAL_BACKUP_FILE" | tee -a "$LOG_FILE"
+    else
+        echo "[Dry Run] Would download and extract backup file: $FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP" | tee -a "$LOG_FILE"
+    fi
 fi
 
+# Rest of the restore script follows (Steps 7-12) unchanged
 # ---------------------------
 # Step 7: Extract Database Credentials from EXISTING Site
 # ---------------------------

@@ -38,7 +38,7 @@ FULL_REMOTE_PATH="${REMOTE_NAME}${DAILY_FOLDER}"
 GLOBAL_LOG_FILE="${GLOBAL_LOG_FILE:-/var/log/wp-content-backup-summary.log}"
 TEMP_DIR=$(mktemp -d)
 BASE_DIR="${BASE_DIR:-/var/www}"
-LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-/var/backups/wordpress}"
+LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-/var/backups/wordpress_backups}"
 
 if [ "$DRYRUN" = true ]; then
     RCLONE_FLAGS="--dry-run"
