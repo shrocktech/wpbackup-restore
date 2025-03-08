@@ -423,11 +423,11 @@ if [ "$DRYRUN" = false ] && [ "$RESTORE_DATABASE" = true ]; then
     # Find and verify table prefixes
     echo "Analyzing table prefixes..." | tee -a "$LOG_FILE"
 
-    # Get existing prefix from wp-config.php
-    EXISTING_PREFIX=$(grep -oP "\\\$table_prefix\s*=\s*['\"]\K[^'\"]+(?=['\"]\s*;)" "$WP_INSTALL_DIR/wp-config.php")
+    # Get existing prefix from wp-config.php - Fixed to handle multiline output
+    EXISTING_PREFIX=$(grep -oP "\\\$table_prefix\s*=\s*['\"]\K[^'\"]+(?=['\"]\s*;)" "$WP_INSTALL_DIR/wp-config.php" | tr -d '\n')
 
-    # Get prefix from backup SQL file by looking at first table
-    BACKUP_PREFIX=$(head -n 100 "$DB_BACKUP_FILE" | grep -oP "CREATE TABLE \`\K[^_]+(?=_)" | head -n 1)
+    # Get prefix from backup SQL file by looking at first table - Fixed to handle multiline output
+    BACKUP_PREFIX=$(head -n 500 "$DB_BACKUP_FILE" | grep -oP "CREATE TABLE \`\K[^_]+(?=_)" | head -n 1 | tr -d '\n')
 
     if [ "$EXISTING_PREFIX" != "$BACKUP_PREFIX" ]; then
         echo "╔════════════════════════════════════════════════════════════════╗"
