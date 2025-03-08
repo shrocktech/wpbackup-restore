@@ -423,11 +423,21 @@ if [ "$DRYRUN" = false ] && [ "$RESTORE_DATABASE" = true ]; then
     # Find and verify table prefixes
     echo "Analyzing table prefixes..." | tee -a "$LOG_FILE"
 
-    # Get existing prefix from wp-config.php - Fixed to handle multiline output
+    # Get existing prefix from wp-config.php
     EXISTING_PREFIX=$(grep -oP "\\\$table_prefix\s*=\s*['\"]\K[^'\"]+(?=['\"]\s*;)" "$WP_INSTALL_DIR/wp-config.php" | tr -d '\n')
 
-    # Get prefix from backup SQL file by looking at first table - Fixed to handle multiline output
-    BACKUP_PREFIX=$(head -n 500 "$DB_BACKUP_FILE" | grep -oP "CREATE TABLE \`\K[^_]+(?=_)" | head -n 1 | tr -d '\n')
+    # Get prefix from backup SQL file - MODIFIED to include the underscore
+    BACKUP_PREFIX=$(head -n 500 "$DB_BACKUP_FILE" | grep -oP "CREATE TABLE \`\K[^_]*_?(?=[a-zA-Z0-9_])" | head -n 1 | tr -d '\n')
+
+    # If the backup prefix doesn't end with underscore but the existing one does, add it
+    if [[ "$EXISTING_PREFIX" == *_ && "$BACKUP_PREFIX" != *_ ]]; then
+        BACKUP_PREFIX="${BACKUP_PREFIX}_"
+    fi
+
+    # If the backup prefix ends with underscore but the existing one doesn't, remove it
+    if [[ "$EXISTING_PREFIX" != *_ && "$BACKUP_PREFIX" == *_ ]]; then
+        BACKUP_PREFIX="${BACKUP_PREFIX%_}"
+    fi
 
     if [ "$EXISTING_PREFIX" != "$BACKUP_PREFIX" ]; then
         echo "╔════════════════════════════════════════════════════════════════╗"
