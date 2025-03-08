@@ -13,13 +13,12 @@
 #    - SQL database dump
 #    - A site-specific backup log ([site]_backup.log).
 # 5. Uploading the archive to an S3-compatible storage via rclone.
-# 6. Verifying the upload and sending an email notification.
+# 6. Verifying the upload and logging the result.
 # 7. Applying a retention policy for cleanup.
 #
 # Requirements:
 # - rclone, tar, mysqldump must be installed and accessible.
 # - S3-compatible storage must be configured in rclone with remotes named [S3Provider] and [S3Backup].
-# - mailutils (or another email client) must be installed and configured for email notifications.
 #
 # Usage:
 # - Run as root: wpbackup
@@ -28,7 +27,6 @@
 # Configuration:
 # - Set environment variables to override defaults (e.g., RCLONE_CONF, BASE_DIR, GLOBAL_LOG_FILE).
 # - Ensure WordPress sites are in $BASE_DIR (e.g., /var/www/example.com/ with wp-config.php in that directory).
-# - Set EMAIL_RECIPIENT to your email address for notifications.
 # -----------------------------------------------------------------------------
 
 set -e
@@ -36,7 +34,7 @@ set -e
 # ---------------------------
 # Step 1: Check for Required Tools
 # ---------------------------
-for cmd in rclone mysqldump tar mail; do
+for cmd in rclone mysqldump tar; do
     if ! command -v "$cmd" &> /dev/null; then
         echo "Error: $cmd is not installed. Please install it and try again."
         exit 1
@@ -80,9 +78,6 @@ TEMP_DIR=$(mktemp -d)
 
 # Base directory for WordPress installations (override with BASE_DIR env var)
 BASE_DIR="${BASE_DIR:-/var/www}"
-
-# Email recipient for notifications (set this to your email address)
-EMAIL_RECIPIENT="your-email@example.com"
 
 # Set rclone flags for dry run
 if [ "$DRYRUN" = true ]; then
@@ -195,11 +190,8 @@ for dir in "$BASE_DIR"/*/ ; do
             if [ "$DRYRUN" = false ]; then
                 if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_NAME")" > /dev/null 2>&1; then
                     echo "$(date): Successfully uploaded $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
-                    # Send email notification
-                    echo "Backup for $DOMAIN_NAME uploaded successfully to $FULL_REMOTE_PATH/$ARCHIVE_NAME on $(date)." | mail -s "Backup Upload Confirmation: $DOMAIN_NAME" "$EMAIL_RECIPIENT"
                 else
                     echo "$(date): Error: Failed to verify upload of $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
-                    echo "Failed to verify upload of $ARCHIVE_NAME for $DOMAIN_NAME to $FULL_REMOTE_PATH." | mail -s "Backup Upload Failed: $DOMAIN_NAME" "$EMAIL_RECIPIENT"
                 fi
             fi
         fi
