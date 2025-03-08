@@ -20,8 +20,7 @@ Follow these steps to set up the WPBACKUP-RESTORE tools:
 1. **Clone the Repository**:
    Copy and paste the following command to clone the repository to `/opt/WPBACKUP-RESTORE`:
    ```bash
-   git clone https://github.com/shrocktech/wpbackup-restore.git /opt/WPBACKUP-RESTORE
-   cd /opt/WPBACKUP-RESTORE
+   git clone https://github.com/shrocktech/wpbackup-restore.git /opt/wpbackup-restore && chmod +x /opt/wpbackup-restore/install.sh /opt/wpbackup-restore/update.sh /opt/wpbackup-restore/wpbackup.sh /opt/wpbackup-restore/wprestore.sh && /opt/wpbackup-restore/install.sh
    ```
 
 2. **Run the Install Script**:
