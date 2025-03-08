@@ -74,8 +74,8 @@ else
 fi
 
 # Output the nano command first, followed by other messages
-echo "nano $RCLONE_CONF_FILE"
 echo "Installation completed successfully."
 echo "Next steps:"
-echo "1. Test the backup script: wpbackup -dryrun"
-echo "2. Test the restore script: wprestore -dryrun"
+echo "1. nano $RCLONE_CONF_FILE"
+echo "2. Test the backup script: wpbackup -dryrun"
+echo "3. Test the restore script: wprestore -dryrun"

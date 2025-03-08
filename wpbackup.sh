@@ -13,11 +13,13 @@
 #    - SQL database dump
 #    - A site-specific backup log ([site]_backup.log).
 # 5. Uploading the archive to an S3-compatible storage via rclone.
-# 6. Applying a retention policy for cleanup.
+# 6. Verifying the upload and sending an email notification.
+# 7. Applying a retention policy for cleanup.
 #
 # Requirements:
 # - rclone, tar, mysqldump must be installed and accessible.
 # - S3-compatible storage must be configured in rclone with remotes named [S3Provider] and [S3Backup].
+# - mailutils (or another email client) must be installed and configured for email notifications.
 #
 # Usage:
 # - Run as root: wpbackup
@@ -26,6 +28,7 @@
 # Configuration:
 # - Set environment variables to override defaults (e.g., RCLONE_CONF, BASE_DIR, GLOBAL_LOG_FILE).
 # - Ensure WordPress sites are in $BASE_DIR (e.g., /var/www/example.com/ with wp-config.php in that directory).
+# - Set EMAIL_RECIPIENT to your email address for notifications.
 # -----------------------------------------------------------------------------
 
 set -e
@@ -33,7 +36,7 @@ set -e
 # ---------------------------
 # Step 1: Check for Required Tools
 # ---------------------------
-for cmd in rclone mysqldump tar; do
+for cmd in rclone mysqldump tar mail; do
     if ! command -v "$cmd" &> /dev/null; then
         echo "Error: $cmd is not installed. Please install it and try again."
         exit 1
@@ -77,6 +80,9 @@ TEMP_DIR=$(mktemp -d)
 
 # Base directory for WordPress installations (override with BASE_DIR env var)
 BASE_DIR="${BASE_DIR:-/var/www}"
+
+# Email recipient for notifications (set this to your email address)
+EMAIL_RECIPIENT="your-email@example.com"
 
 # Set rclone flags for dry run
 if [ "$DRYRUN" = true ]; then
@@ -166,30 +172,40 @@ apply_retention_policy() {
 
 echo "$(date): Backup process started." | tee -a "$GLOBAL_LOG_FILE"
 
+# Loop through directories under BASE_DIR that contain wp-config.php
 for dir in "$BASE_DIR"/*/ ; do
-    WP_CONFIG="${dir}wp-config.php"
+    if [ -f "${dir}wp-config.php" ]; then
+        WP_CONFIG="${dir}wp-config.php"
 
-    if [ ! -f "$WP_CONFIG" ]; then
-        echo "$(date): No wp-config.php found in $dir. Skipping." | tee -a "$GLOBAL_LOG_FILE"
-        continue
+        DB_NAME=$(grep -oP "define\s*\(\s*'DB_NAME'\s*,\s*'\K[^']+" "$WP_CONFIG")
+        DB_USER=$(grep -oP "define\s*\(\s*'DB_USER'\s*,\s*'\K[^']+" "$WP_CONFIG")
+        DB_PASSWORD=$(grep -oP "define\s*\(\s*'DB_PASSWORD'\s*,\s*'\K[^']+" "$WP_CONFIG")
+
+        DOMAIN_NAME=$(basename "$dir")
+        SITE_LOG_FILE="/tmp/${DOMAIN_NAME}_backup.log"
+        WP_CONTENT_DIR="${dir}wp-content"
+        DB_DUMP="/tmp/${DB_NAME}_$(date +'%Y-%m-%d').sql"
+        ARCHIVE_NAME="${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
+
+        if mysqldump -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > "$DB_DUMP" 2>>"$SITE_LOG_FILE"; then
+            tar -czvf "$ARCHIVE_NAME" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"
+            rclone copy $RCLONE_FLAGS -v "$ARCHIVE_NAME" "$FULL_REMOTE_PATH" --log-file="$SITE_LOG_FILE"
+
+            # Verify the upload (skip verification in dry run)
+            if [ "$DRYRUN" = false ]; then
+                if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_NAME")" > /dev/null 2>&1; then
+                    echo "$(date): Successfully uploaded $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
+                    # Send email notification
+                    echo "Backup for $DOMAIN_NAME uploaded successfully to $FULL_REMOTE_PATH/$ARCHIVE_NAME on $(date)." | mail -s "Backup Upload Confirmation: $DOMAIN_NAME" "$EMAIL_RECIPIENT"
+                else
+                    echo "$(date): Error: Failed to verify upload of $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
+                    echo "Failed to verify upload of $ARCHIVE_NAME for $DOMAIN_NAME to $FULL_REMOTE_PATH." | mail -s "Backup Upload Failed: $DOMAIN_NAME" "$EMAIL_RECIPIENT"
+                fi
+            fi
+        fi
+
+        rm -v "$ARCHIVE_NAME" "$SITE_LOG_FILE" "$DB_DUMP"
     fi
-
-    DB_NAME=$(grep -oP "define\s*\(\s*'DB_NAME'\s*,\s*'\K[^']+" "$WP_CONFIG")
-    DB_USER=$(grep -oP "define\s*\(\s*'DB_USER'\s*,\s*'\K[^']+" "$WP_CONFIG")
-    DB_PASSWORD=$(grep -oP "define\s*\(\s*'DB_PASSWORD'\s*,\s*'\K[^']+" "$WP_CONFIG")
-
-    DOMAIN_NAME=$(basename "$dir")
-    SITE_LOG_FILE="/tmp/${DOMAIN_NAME}_backup.log"
-    WP_CONTENT_DIR="${dir}wp-content"
-    DB_DUMP="/tmp/${DB_NAME}_$(date +'%Y-%m-%d').sql"
-    ARCHIVE_NAME="${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
-
-    if mysqldump -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > "$DB_DUMP" 2>>"$SITE_LOG_FILE"; then
-        tar -czvf "$ARCHIVE_NAME" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"
-        rclone copy $RCLONE_FLAGS -v "$ARCHIVE_NAME" "$FULL_REMOTE_PATH" --log-file="$SITE_LOG_FILE"
-    fi
-
-    rm -v "$ARCHIVE_NAME" "$SITE_LOG_FILE" "$DB_DUMP"
 done
 
 apply_retention_policy
