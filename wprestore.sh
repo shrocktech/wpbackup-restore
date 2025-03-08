@@ -265,71 +265,46 @@ echo "Latest backup directory found: $LATEST_DIR" | tee -a "$LOG_FILE"
 # ---------------------------
 # Step 5: Find Backup File for the Domain
 # ---------------------------
-echo "$(date): Backup process started." | tee -a "$GLOBAL_LOG_FILE"
+echo "Looking for the latest backup file for '$DOMAIN' in $FULL_REMOTE_PATH/$LATEST_DIR/..." | tee -a "$LOG_FILE"
+LATEST_BACKUP=$(rclone lsf "$FULL_REMOTE_PATH/$LATEST_DIR/" --include "${DOMAIN}*" | sort -r | head -n 1)
 
-for dir in "$BASE_DIR"/*/ ; do
-    if [ -f "${dir}wp-config.php" ]; then
-        WP_CONFIG="${dir}wp-config.php"
-
-        DB_NAME=$(grep -oP "define\s*\(\s*'DB_NAME'\s*,\s*'\K[^']+" "$WP_CONFIG")
-        DB_USER=$(grep -oP "define\s*\(\s*'DB_USER'\s*,\s*'\K[^']+" "$WP_CONFIG")
-        DB_PASSWORD=$(grep -oP "define\s*\(\s*'DB_PASSWORD'\s*,\s*'\K[^']+" "$WP_CONFIG")
-
-        DOMAIN_NAME=$(basename "$dir")
-        SITE_LOG_FILE="/tmp/${DOMAIN_NAME}_backup.log"
-        WP_CONTENT_DIR="${dir}wp-content"
-        DB_DUMP="/tmp/${DB_NAME}_$(date +'%Y-%m-%d').sql"
-        ARCHIVE_NAME="${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
-
-        # Check if wp-content exists
-        if [ ! -d "$WP_CONTENT_DIR" ]; then
-            echo "$(date): Error: wp-content directory not found at $WP_CONTENT_DIR for $DOMAIN_NAME." | tee -a "$GLOBAL_LOG_FILE"
-            curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "wp-content directory not found at $WP_CONTENT_DIR for $DOMAIN_NAME." "$WEBHOOK_URL"
-            continue
-        fi
-
-        # Create database dump with --no-tablespaces to avoid PROCESS privilege requirement
-        if ! mysqldump -u "$DB_USER" -p"$DB_PASSWORD" --no-tablespaces "$DB_NAME" > "$DB_DUMP" 2>>"$SITE_LOG_FILE"; then
-            echo "$(date): Error: Failed to dump database for $DOMAIN_NAME. Check $SITE_LOG_FILE for details." | tee -a "$GLOBAL_LOG_FILE"
-            curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "Failed to dump database for $DOMAIN_NAME. Check $SITE_LOG_FILE for details." "$WEBHOOK_URL"
-            continue
-        fi
-
-        # Verify database dump exists
-        if [ ! -f "$DB_DUMP" ]; then
-            echo "$(date): Error: Database dump file $DB_DUMP not created for $DOMAIN_NAME." | tee -a "$GLOBAL_LOG_FILE"
-            curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "Database dump file $DB_DUMP not created for $DOMAIN_NAME." "$WEBHOOK_URL"
-            continue
-        fi
-
-        # Create the archive
-        if tar -czvf "$ARCHIVE_NAME" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"; then
-            rclone copy $RCLONE_FLAGS -v "$ARCHIVE_NAME" "$FULL_REMOTE_PATH" --log-file="$SITE_LOG_FILE"
-
-            # Verify the upload (skip verification in dry run)
-            if [ "$DRYRUN" = false ]; then
-                if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_NAME")" > /dev/null 2>&1; then
-                    echo "$(date): Successfully uploaded $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
-                    curl -s -X POST -H "Title: Backup Completed: $DOMAIN_NAME" -d "Backup for $DOMAIN_NAME completed successfully on $(date)." "$WEBHOOK_URL"
-                else
-                    echo "$(date): Error: Failed to verify upload of $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
-                    curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "Failed to verify upload of $ARCHIVE_NAME for $DOMAIN_NAME to $FULL_REMOTE_PATH." "$WEBHOOK_URL"
-                fi
-            fi
-        else
-            echo "$(date): Error: Failed to create archive $ARCHIVE_NAME for $DOMAIN_NAME." | tee -a "$GLOBAL_LOG_FILE"
-            curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "Failed to create archive $ARCHIVE_NAME for $DOMAIN_NAME." "$WEBHOOK_URL"
-        fi
-
-        rm -v "$ARCHIVE_NAME" "$SITE_LOG_FILE" "$DB_DUMP"
-    fi
-done
-
-apply_retention_policy
-echo "$(date): Backup process completed successfully." | tee -a "$GLOBAL_LOG_FILE"
-if [ "$DRYRUN" = false ]; then
-    curl -s -X POST -H "Title: Backup Process Completed" -d "Backup process completed successfully on $(date) for all sites." "$WEBHOOK_URL"
+if [ -z "$LATEST_BACKUP" ]; then
+    echo "Error: No backup files found for $DOMAIN." | tee -a "$LOG_FILE"
+    exit 1
 fi
+echo "Latest backup file found: $LATEST_BACKUP" | tee -a "$LOG_FILE"
+
+# Prompt for restore type
+echo "Please choose restore type:"
+echo "1) Full restore (wp-content + database)"
+echo "2) Database restore only" 
+echo "3) Cancel"
+echo ""
+echo "Default: Option 1 will be selected in 15 seconds..."
+
+read -t 15 -p "Enter your choice (1-3): " RESTORE_CHOICE || true
+
+if [ -z "$RESTORE_CHOICE" ]; then
+    echo "No input received, defaulting to full restore"
+    RESTORE_CHOICE=1
+fi
+
+case "$RESTORE_CHOICE" in
+    1)
+        echo "Proceeding with full restore..." | tee -a "$LOG_FILE"
+        RESTORE_DATABASE=true
+        RESTORE_WP_CONTENT=true
+        ;;
+    2)
+        echo "Proceeding with database restore only..." | tee -a "$LOG_FILE"
+        RESTORE_DATABASE=true
+        RESTORE_WP_CONTENT=false
+        ;;
+    *)
+        echo "Restore canceled by user." | tee -a "$LOG_FILE"
+        exit 0
+        ;;
+esac
 
 # ---------------------------
 # Step 6: Check Space and Download the Backup
