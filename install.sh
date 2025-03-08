@@ -6,7 +6,7 @@ set -e
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
-    echo "This script must be run as root. Use sudo."
+    echo "This script must be run as root."
     exit 1
 fi
 
@@ -53,6 +53,8 @@ fi
 
 # 3. Install scripts
 INSTALL_DIR="/usr/local/bin"
+echo "Listing files in current directory for debugging:"
+ls -l
 for script in wpbackup wprestore update; do
     if [ ! -f "${script}.sh" ]; then
         echo "Error: ${script}.sh not found in the repository."
