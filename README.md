@@ -27,7 +27,7 @@ nano /root/.config/rclone/rclone.conf
 ```
 Update with your details (replace placeholders):
 ```plaintext
-[S3Provider]
+[MyS3Provider]
 type = s3
 provider = Other
 env_auth = false
@@ -38,13 +38,13 @@ no_check_bucket = true
 
 [S3Backup]
 type = alias
-remote = S3Provider:your-backup-directory
+remote = MyS3Provider:your-backup-directory
 ```
 Save (Ctrl+O, Enter, Ctrl+X) and exit.
 
 - **Test Rclone Configuration**: Verify connectivity with your S3-compatible storage:
   ```bash
-  rclone lsd S3Provider:
+  rclone lsd MyS3Provider:
   ```
   - This should list the directories in your storage. If it fails, check your credentials and endpoint in `/root/.config/rclone/rclone.conf`.
 

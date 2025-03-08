@@ -18,7 +18,7 @@
 #
 # Requirements:
 # - rclone, tar, mysqldump must be installed and accessible.
-# - S3-compatible storage must be configured in rclone with remotes named [S3Provider] and [S3Backup].
+# - S3-compatible storage must be configured in rclone with remotes named [MyS3Provider] and [S3Backup].
 #
 # Usage:
 # - Run as root: wpbackup
