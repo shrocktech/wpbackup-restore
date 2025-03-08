@@ -17,14 +17,15 @@
 #
 # Requirements:
 # - rclone, tar, mysqldump must be installed and accessible.
-# - S3-compatible storage must be configured in rclone.
+# - S3-compatible storage must be configured in rclone with remotes named [S3Provider] and [S3Backup].
 #
 # Usage:
-# - Run as root or with sudo: wpbackup
+# - Run as root: wpbackup
 # - Run with dry-run mode: wpbackup -dryrun
 #
 # Configuration:
 # - Set environment variables to override defaults (e.g., RCLONE_CONF, BASE_DIR, GLOBAL_LOG_FILE).
+# - Ensure WordPress sites are in $BASE_DIR (e.g., /var/www/example.com/ with wp-config.php in that directory).
 # -----------------------------------------------------------------------------
 
 set -e
@@ -60,13 +61,13 @@ if [ ! -f "$RCLONE_CONF" ]; then
     exit 1
 fi
 
-# Use the generic alias remote from rclone.conf
-REMOTE_NAME="${REMOTE_NAME:-S3Backup}"
+# Use the generic alias remote from rclone.conf (append : for rclone syntax)
+REMOTE_NAME="${REMOTE_NAME:-S3Backup:}"
 
 # Log and construct the remote destination dynamically
 echo "Using remote alias '$REMOTE_NAME' defined in rclone.conf."
 DAILY_FOLDER="$(date +'%Y%m%d')_Daily_Backup_Job"
-FULL_REMOTE_PATH="${REMOTE_NAME}/$DAILY_FOLDER"
+FULL_REMOTE_PATH="${REMOTE_NAME}${DAILY_FOLDER}"
 
 # Global log file (override with GLOBAL_LOG_FILE env var)
 GLOBAL_LOG_FILE="${GLOBAL_LOG_FILE:-/var/log/wp-content-backup-summary.log}"
@@ -148,7 +149,7 @@ apply_retention_policy() {
     for folder in "${folders[@]}"; do
         if [ -z "${keep_folders[$folder]:-}" ]; then
             echo "$(date): Deleting $folder (doesn't match retention rules)" | tee -a "$GLOBAL_LOG_FILE"
-            rclone purge $RCLONE_FLAGS "${REMOTE_NAME}/$folder" 2>>"$GLOBAL_LOG_FILE" || echo "Error deleting $folder" | tee -a "$GLOBAL_LOG_FILE"
+            rclone purge $RCLONE_FLAGS "${REMOTE_NAME}${folder}" 2>>"$GLOBAL_LOG_FILE" || echo "Error deleting $folder" | tee -a "$GLOBAL_LOG_FILE"
             ((deleted_count++))
         else
             echo "$(date): Keeping $folder (${keep_folders[$folder]} backup)" | tee -a "$GLOBAL_LOG_FILE"
