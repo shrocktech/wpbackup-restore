@@ -265,151 +265,118 @@ echo "Latest backup directory found: $LATEST_DIR" | tee -a "$LOG_FILE"
 # ---------------------------
 # Step 5: Find Backup File for the Domain
 # ---------------------------
-echo "Looking for the latest backup file for '$DOMAIN' in $FULL_REMOTE_PATH/$LATEST_DIR..." | tee -a "$LOG_FILE"
-LATEST_BACKUP=$(rclone lsf "$FULL_REMOTE_PATH/$LATEST_DIR" --files-only | grep -E "^${DOMAIN}_[0-9]{4}-[0-9]{2}-[0-9]{2}\.tar\.gz$" | sort -r | head -n 1)
+echo "$(date): Backup process started." | tee -a "$GLOBAL_LOG_FILE"
 
-if [ -z "$LATEST_BACKUP" ]; then
-    echo "Error: No backup file found for domain '$DOMAIN' in the latest directory '$LATEST_DIR'." | tee -a "$LOG_FILE"
-    exit 1
-fi
-echo "Latest backup file found: $LATEST_BACKUP" | tee -a "$LOG_FILE"
+for dir in "$BASE_DIR"/*/ ; do
+    if [ -f "${dir}wp-config.php" ]; then
+        WP_CONFIG="${dir}wp-config.php"
 
-# Confirm the backup file and restore type with timeout
-if [ "$DRYRUN" = false ]; then
-    echo "Please choose restore type:"
-    echo "1) Full restore (wp-content + database)"
-    echo "2) Database restore only"
-    echo "3) Cancel"
-    echo "Default: Option 1 will be selected in 15 seconds..."
-    
-    # Read with timeout and proper error handling
-    read -t 15 -p "Enter your choice (1-3): " RESTORE_CHOICE || true
-    
-    # Check if we got a response or if we should use default
-    if [ -z "$RESTORE_CHOICE" ]; then
-        echo "No input received, defaulting to option 1"
-        RESTORE_CHOICE=1
+        DB_NAME=$(grep -oP "define\s*\(\s*'DB_NAME'\s*,\s*'\K[^']+" "$WP_CONFIG")
+        DB_USER=$(grep -oP "define\s*\(\s*'DB_USER'\s*,\s*'\K[^']+" "$WP_CONFIG")
+        DB_PASSWORD=$(grep -oP "define\s*\(\s*'DB_PASSWORD'\s*,\s*'\K[^']+" "$WP_CONFIG")
+
+        DOMAIN_NAME=$(basename "$dir")
+        SITE_LOG_FILE="/tmp/${DOMAIN_NAME}_backup.log"
+        WP_CONTENT_DIR="${dir}wp-content"
+        DB_DUMP="/tmp/${DB_NAME}_$(date +'%Y-%m-%d').sql"
+        ARCHIVE_NAME="${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
+
+        # Check if wp-content exists
+        if [ ! -d "$WP_CONTENT_DIR" ]; then
+            echo "$(date): Error: wp-content directory not found at $WP_CONTENT_DIR for $DOMAIN_NAME." | tee -a "$GLOBAL_LOG_FILE"
+            curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "wp-content directory not found at $WP_CONTENT_DIR for $DOMAIN_NAME." "$WEBHOOK_URL"
+            continue
+        fi
+
+        # Create database dump with --no-tablespaces to avoid PROCESS privilege requirement
+        if ! mysqldump -u "$DB_USER" -p"$DB_PASSWORD" --no-tablespaces "$DB_NAME" > "$DB_DUMP" 2>>"$SITE_LOG_FILE"; then
+            echo "$(date): Error: Failed to dump database for $DOMAIN_NAME. Check $SITE_LOG_FILE for details." | tee -a "$GLOBAL_LOG_FILE"
+            curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "Failed to dump database for $DOMAIN_NAME. Check $SITE_LOG_FILE for details." "$WEBHOOK_URL"
+            continue
+        fi
+
+        # Verify database dump exists
+        if [ ! -f "$DB_DUMP" ]; then
+            echo "$(date): Error: Database dump file $DB_DUMP not created for $DOMAIN_NAME." | tee -a "$GLOBAL_LOG_FILE"
+            curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "Database dump file $DB_DUMP not created for $DOMAIN_NAME." "$WEBHOOK_URL"
+            continue
+        fi
+
+        # Create the archive
+        if tar -czvf "$ARCHIVE_NAME" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"; then
+            rclone copy $RCLONE_FLAGS -v "$ARCHIVE_NAME" "$FULL_REMOTE_PATH" --log-file="$SITE_LOG_FILE"
+
+            # Verify the upload (skip verification in dry run)
+            if [ "$DRYRUN" = false ]; then
+                if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_NAME")" > /dev/null 2>&1; then
+                    echo "$(date): Successfully uploaded $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
+                    curl -s -X POST -H "Title: Backup Completed: $DOMAIN_NAME" -d "Backup for $DOMAIN_NAME completed successfully on $(date)." "$WEBHOOK_URL"
+                else
+                    echo "$(date): Error: Failed to verify upload of $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
+                    curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "Failed to verify upload of $ARCHIVE_NAME for $DOMAIN_NAME to $FULL_REMOTE_PATH." "$WEBHOOK_URL"
+                fi
+            fi
+        else
+            echo "$(date): Error: Failed to create archive $ARCHIVE_NAME for $DOMAIN_NAME." | tee -a "$GLOBAL_LOG_FILE"
+            curl -s -X POST -H "Title: Backup Failed: $DOMAIN_NAME" -d "Failed to create archive $ARCHIVE_NAME for $DOMAIN_NAME." "$WEBHOOK_URL"
+        fi
+
+        rm -v "$ARCHIVE_NAME" "$SITE_LOG_FILE" "$DB_DUMP"
     fi
-    
-    case $RESTORE_CHOICE in
-        1)
-            RESTORE_WP_CONTENT=true
-            RESTORE_DATABASE=true
-            echo "Proceeding with full restore..." | tee -a "$LOG_FILE"
-            ;;
-        2)
-            RESTORE_WP_CONTENT=false
-            RESTORE_DATABASE=true
-            echo "Proceeding with database restore only..." | tee -a "$LOG_FILE"
-            echo "Note: Full backup will still be extracted temporarily (required for SQL file)..." | tee -a "$LOG_FILE"
-            ;;
-        3)
-            echo "Restore process aborted by the user." | tee -a "$LOG_FILE"
-            exit 0
-            ;;
-        *)
-            echo "Invalid choice, defaulting to full restore..." | tee -a "$LOG_FILE"
-            RESTORE_WP_CONTENT=true
-            RESTORE_DATABASE=true
-            ;;
-    esac
-else
-    echo "[Dry Run] Would proceed with backup file: $LATEST_BACKUP" | tee -a "$LOG_FILE"
+done
+
+apply_retention_policy
+echo "$(date): Backup process completed successfully." | tee -a "$GLOBAL_LOG_FILE"
+if [ "$DRYRUN" = false ]; then
+    curl -s -X POST -H "Title: Backup Process Completed" -d "Backup process completed successfully on $(date) for all sites." "$WEBHOOK_URL"
 fi
 
 # ---------------------------
 # Step 6: Check Space and Download the Backup
 # ---------------------------
 if [ "$DRYRUN" = false ]; then
-    echo "Checking available disk space..." | tee -a "$LOG_FILE"
     check_disk_space
 fi
-
 TEMP_DIR=$(mktemp -d)
 
 if [ "$DRYRUN" = false ]; then
     echo "Downloading the backup file from $FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP..." | tee -a "$LOG_FILE"
-    echo "Download started at: $(date '+%H:%M:%S')" | tee -a "$LOG_FILE"
     if ! rclone copy "$FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP" "$TEMP_DIR" --progress >/dev/null 2>&1; then
         echo "Error: Failed to download backup file." | tee -a "$LOG_FILE"
         exit 1
     fi
-    echo "Download completed at: $(date '+%H:%M:%S')" | tee -a "$LOG_FILE"
+    echo "✓ Download completed" | tee -a "$LOG_FILE"
     
-    # Extract the archive after download
     ARCHIVE_FILE="$TEMP_DIR/$LATEST_BACKUP"
-    echo "Starting extraction at: $(date '+%H:%M:%S')" | tee -a "$LOG_FILE"
-
-    # Progress bar function
-    progress_bar() {
-        local pid=$1
-        local delay=0.2
-        local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-        local width=50
-        
-        # Clear line and move to start
-        echo -ne "\r\033[K"
-        echo -ne "Extracting files:  [${spinstr:0:1}${EMPTY_BAR}] 0%"
-        
-        while kill -0 $pid 2>/dev/null; do
-            for i in $(seq 0 $width); do
-                # Calculate percentage
-                local percent=$((i * 2))
-                # Create progress bar string
-                local filled=$(printf '%*s' "$i" '' | tr ' ' '=')
-                local empty=$(printf '%*s' "$((width - i))" '' | tr ' ' ' ')
-                
-                # Clear line and print updated bar
-                echo -ne "\r\033[K"
-                echo -ne "Extracting files:  [${filled}${spinstr:0:1}${empty}] ${percent}%"
-                
-                # Rotate spinner character
-                spinstr=${spinstr:1}${spinstr:0:1}
-                sleep $delay
-            done
-        done
-        
-        # Show completed bar
-        echo -ne "\r\033[K"
-        echo -ne "Extracting files:  ["
-        printf '%*s' "$width" '' | tr ' ' '='
-        echo -e "] 100%"
-        echo -e "\nExtraction completed successfully!"
-    }
-
-    # Run tar in background and show progress
-    tar -xzf "$ARCHIVE_FILE" -C "$TEMP_DIR" >/dev/null 2>&1 &
-    PID=$!
-    progress_bar $PID
-
-    # Check if extraction was successful
-    if ! wait $PID; then
+    echo "Extracting $ARCHIVE_FILE..." | tee -a "$LOG_FILE"
+    if ! tar -xzvf "$ARCHIVE_FILE" -C "$TEMP_DIR"; then
         echo "Error: Failed to extract the backup archive." | tee -a "$LOG_FILE"
         exit 1
     fi
-    echo "✓ Extraction completed at: $(date '+%H:%M:%S')" | tee -a "$LOG_FILE"
     
-    # Verify extracted contents
-    echo "Verifying extracted contents..." | tee -a "$LOG_FILE"
-    if [ -d "$TEMP_DIR/wp-content" ]; then
-        CONTENT_SIZE=$(du -sh "$TEMP_DIR/wp-content" | cut -f1)
-        echo "✓ wp-content directory found ($CONTENT_SIZE)" | tee -a "$LOG_FILE"
-    else
-        echo "Error: wp-content directory not found in backup" | tee -a "$LOG_FILE"
+    # Debug: List extracted contents
+    echo "Extracted contents of $TEMP_DIR:" | tee -a "$LOG_FILE"
+    ls -lR "$TEMP_DIR" >> "$LOG_FILE" 2>&1 || echo "Error: Cannot list contents of $TEMP_DIR" | tee -a "$LOG_FILE"
+
+    # Find wp-content directory
+    WP_CONTENT_DIR=$(find "$TEMP_DIR" -type d -name "wp-content" -print -quit)
+    if [ -z "$WP_CONTENT_DIR" ]; then
+        echo "Error: wp-content directory not found in extracted backup." | tee -a "$LOG_FILE"
         exit 1
     fi
-    
-    if [ -f "$TEMP_DIR/"*_db_*.sql ]; then
-        DB_SIZE=$(du -sh "$TEMP_DIR/"*_db_*.sql | cut -f1)
-        echo "✓ Database backup found ($DB_SIZE)" | tee -a "$LOG_FILE"
-    else
-        echo "Error: Database backup file not found" | tee -a "$LOG_FILE"
+    echo "Found wp-content at: $WP_CONTENT_DIR" | tee -a "$LOG_FILE"
+    CONTENT_SIZE=$(du -sh "$WP_CONTENT_DIR" | cut -f1)
+    echo "✓ wp-content directory found ($CONTENT_SIZE)" | tee -a "$LOG_FILE"
+
+    # Find database file
+    DB_BACKUP_FILE=$(find "$TEMP_DIR" -type f -name "*.sql" -print -quit)
+    if [ -z "$DB_BACKUP_FILE" ]; then
+        echo "Error: Database file (.sql) not found in extracted backup." | tee -a "$LOG_FILE"
         exit 1
     fi
-    
-    # Log file permissions for debugging if needed
-    echo "Detailed backup contents:" >> "$LOG_FILE"
-    ls -la "$TEMP_DIR" >> "$LOG_FILE"
+    echo "Found database file at: $DB_BACKUP_FILE" | tee -a "$LOG_FILE"
+    DB_SIZE=$(du -sh "$DB_BACKUP_FILE" | cut -f1)
+    echo "✓ Database backup found ($DB_SIZE)" | tee -a "$LOG_FILE"
 else
     echo "[Dry Run] Would download and extract backup file: $FULL_REMOTE_PATH/$LATEST_DIR/$LATEST_BACKUP" | tee -a "$LOG_FILE"
 fi
