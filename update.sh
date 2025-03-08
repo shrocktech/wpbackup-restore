@@ -4,6 +4,12 @@
 
 set -e
 
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+    echo "This script must be run as root."
+    exit 1
+fi
+
 # Check for required tools
 for cmd in curl tar; do
     if ! command -v "$cmd" &> /dev/null; then

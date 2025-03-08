@@ -16,7 +16,7 @@ A collection of scripts to backup and restore WordPress sites using Rclone and S
 ## Installation
 Copy and paste the following command to download, set up, and install the scripts in `/opt/wpbackup-restore`, with scripts copied to `/usr/local/bin`:
 ```bash
-mkdir -p /opt/wpbackup-restore && cd /opt/wpbackup-restore && curl -L https://github.com/shrocktech/wpbackup-restore/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1 && chmod +x /opt/wpbackup-restore/install.sh /opt/wpbackup-restore/update.sh /opt/wpbackup-restore/wpbackup.sh /opt/wpbackup-restore/wprestore.sh && /opt/wpbackup-restore/install.sh
+mkdir -p /opt/wpbackup-restore && curl -L https://github.com/shrocktech/wpbackup-restore/archive/refs/heads/main.tar.gz | tar -xz -C /opt/wpbackup-restore --strip-components=1 && chmod +x /opt/wpbackup-restore/install.sh /opt/wpbackup-restore/update.sh /opt/wpbackup-restore/wpbackup.sh /opt/wpbackup-restore/wprestore.sh && /opt/wpbackup-restore/install.sh
 ```
 - This downloads the latest files, sets permissions, installs Rclone (if needed), copies `rclone.conf.example` to `/root/.config/rclone/rclone.conf`, installs `wpbackup`, `wprestore`, and `update-wpscripts` to `/usr/local/bin`, and sets a cron job for daily backups at 2:00 AM.
 
@@ -69,7 +69,7 @@ update-wpscripts
 ```
 - **Note**: This updates `wpbackup` and `wprestore` in `/usr/local/bin` using the latest tarball. If it fails (e.g., due to a corrupted setup), re-run the installation:
   ```bash
-  rm -rf /opt/wpbackup-restore && mkdir -p /opt/wpbackup-restore && cd /opt/wpbackup-restore && curl -L https://github.com/shrocktech/wpbackup-restore/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1 && chmod +x /opt/wpbackup-restore/install.sh /opt/wpbackup-restore/update.sh /opt/wpbackup-restore/wpbackup.sh /opt/wpbackup-restore/wprestore.sh && /opt/wpbackup-restore/install.sh
+  rm -rf /opt/wpbackup-restore && mkdir -p /opt/wpbackup-restore && curl -L https://github.com/shrocktech/wpbackup-restore/archive/refs/heads/main.tar.gz | tar -xz -C /opt/wpbackup-restore --strip-components=1 && chmod +x /opt/wpbackup-restore/install.sh /opt/wpbackup-restore/update.sh /opt/wpbackup-restore/wpbackup.sh /opt/wpbackup-restore/wprestore.sh && /opt/wpbackup-restore/install.sh
   ```
 
 ## Configuration Options
