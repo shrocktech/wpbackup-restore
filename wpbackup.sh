@@ -179,10 +179,13 @@ for dir in "$BASE_DIR"/*/ ; do
         DOMAIN_NAME=$(basename "$dir")
         SITE_LOG_FILE="/tmp/${DOMAIN_NAME}_backup.log"
         WP_CONTENT_DIR="${dir}wp-content"
-        DB_DUMP="/tmp/${DB_NAME}_$(date +'%Y-%m-%d').sql"
+        
+        # Change database filename format to match restore script expectations
+        DOMAIN_PREFIX=${DOMAIN_NAME%%.*}
+        DB_DUMP="/tmp/${DOMAIN_PREFIX}_db_$(date +'%Y-%m-%d').sql"
         ARCHIVE_NAME="${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
 
-        if mysqldump -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > "$DB_DUMP" 2>>"$SITE_LOG_FILE"; then
+        if mysqldump -u "$DB_USER" -p"$DB_PASSWORD" --no-tablespaces "$DB_NAME" > "$DB_DUMP" 2>>"$SITE_LOG_FILE"; then
             tar -czvf "$ARCHIVE_NAME" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"
             rclone copy $RCLONE_FLAGS -v "$ARCHIVE_NAME" "$FULL_REMOTE_PATH" --log-file="$SITE_LOG_FILE"
 

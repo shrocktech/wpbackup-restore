@@ -423,16 +423,23 @@ if [ "$DRYRUN" = false ] && [ "$RESTORE_DATABASE" = true ]; then
     echo "Listing contents of backup directory:" | tee -a "$LOG_FILE"
     ls -la "$TEMP_DIR" | tee -a "$LOG_FILE"
     
-    # First try the specific pattern
-    DB_BACKUP_FILE=$(find "$TEMP_DIR" -maxdepth 1 -type f -name "${DOMAIN%.*}_db_*.sql" -o -name "*_db_*.sql" | sort -r | head -n1)
+    # Extract domain prefix (without TLD)
+    DOMAIN_PREFIX=${DOMAIN%%.*}
     
-    echo "Looking for SQL file matching pattern: ${DOMAIN%.*}_db_*.sql or *_db_*.sql" | tee -a "$LOG_FILE"
-    echo "Search location: $TEMP_DIR" | tee -a "$LOG_FILE"
+    # Try multiple patterns to find database file
+    echo "Looking for database file with pattern: ${DOMAIN_PREFIX}_db_*.sql" | tee -a "$LOG_FILE"
+    DB_BACKUP_FILE=$(find "$TEMP_DIR" -type f -name "${DOMAIN_PREFIX}_db_*.sql" 2>/dev/null || true)
+    
+    # If not found, try alternative patterns
+    if [ -z "$DB_BACKUP_FILE" ]; then
+        echo "Trying alternative naming patterns..." | tee -a "$LOG_FILE"
+        DB_BACKUP_FILE=$(find "$TEMP_DIR" -type f \( -name "db_${DOMAIN_PREFIX}*.sql" -o -name "db_${DOMAIN}*.sql" -o -name "*_${DOMAIN_PREFIX}*.sql" -o -name "*.sql" \) | head -n1)
+    fi
     
     if [ -z "$DB_BACKUP_FILE" ]; then
-        echo "Error: No domain-specific SQL backup file found" | tee -a "$LOG_FILE"
+        echo "Error: No SQL backup file found in $TEMP_DIR" | tee -a "$LOG_FILE"
         echo "Contents of $TEMP_DIR:" | tee -a "$LOG_FILE"
-        ls -la "$TEMP_DIR" | tee -a "$LOG_FILE"
+        find "$TEMP_DIR" -type f | tee -a "$LOG_FILE"
         exit 1
     fi
     
