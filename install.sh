@@ -11,7 +11,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Check for required tools
-for cmd in curl git; do
+for cmd in curl tar; do
     if ! command -v "$cmd" &> /dev/null; then
         echo "Error: $cmd is not installed. Please install it and try again."
         exit 1
@@ -35,9 +35,9 @@ else
     mkdir -p "$RCLONE_CONF_DIR"
     cp rclone.conf.example "$RCLONE_CONF_FILE"
     echo "Rclone configuration file copied to $RCLONE_CONF_FILE."
-    echo "Please edit $RCLONE_CONF_FILE with your credentials (e.g., replace MyS3Provider with IDrive and update access keys, secret key, and endpoint)."
-    echo "Example configuration for IDrive:"
-    echo "  [IDrive]"
+    echo "Please edit $RCLONE_CONF_FILE with your S3-compatible storage credentials (e.g., replace placeholders with your access keys, secret key, and endpoint)."
+    echo "Example configuration for an S3-compatible provider:"
+    echo "  [S3Provider]"
     echo "  type = s3"
     echo "  provider = Other"
     echo "  env_auth = false"
@@ -45,10 +45,10 @@ else
     echo "  secret_access_key = your_secret_key"
     echo "  endpoint = your_endpoint_url"
     echo "  no_check_bucket = true"
-    echo "  [IDriveBackup]"
+    echo "  [S3Backup]"
     echo "  type = alias"
-    echo "  remote = IDrive:contabosites/backups"
-    echo "Use 'sudo nano $RCLONE_CONF_FILE' to make these changes."
+    echo "  remote = S3Provider:your-backup-directory"
+    echo "Use 'nano $RCLONE_CONF_FILE' to make these changes."
 fi
 
 # 3. Install scripts
@@ -81,6 +81,6 @@ fi
 
 echo "Installation completed successfully."
 echo "Next steps:"
-echo "1. Edit $RCLONE_CONF_FILE with your IDrive credentials using 'sudo nano $RCLONE_CONF_FILE'."
+echo "1. Edit $RCLONE_CONF_FILE with your S3-compatible storage credentials using 'nano $RCLONE_CONF_FILE'."
 echo "2. Test the backup script: wpbackup -dryrun"
 echo "3. Test the restore script: wprestore -dryrun"

@@ -1,9 +1,9 @@
 # wpbackup-restore
 
-A collection of scripts to backup and restore WordPress sites using Rclone and IDrive S3-compatible storage.
+A collection of scripts to backup and restore WordPress sites using Rclone and S3-compatible storage.
 
 ## Features
-- **Backup**: Backs up WordPress sites (database, `wp-content`, `wp-config.php`) and uploads to IDrive.
+- **Backup**: Backs up WordPress sites (database, `wp-content`, `wp-config.php`) and uploads to S3-compatible storage.
 - **Restore**: Restores WordPress sites from backups with database and file options.
 - **Retention Policy**: Manages backup retention (7 days daily, 28 days weekly, 90 days monthly).
 - **Easy Updates**: Update scripts with a single command.
@@ -14,20 +14,20 @@ A collection of scripts to backup and restore WordPress sites using Rclone and I
 - `curl`, `tar`, `rclone`, `mysqldump`, `mysql`, `rsync`, `pv`
 
 ## Installation
-Copy and paste the following command to download, set up, and install the scripts in `/opt/wpbackup-restore`:
+Copy and paste the following command to download, set up, and install the scripts in `/opt/wpbackup-restore`, with scripts copied to `/usr/local/bin`:
 ```bash
 mkdir -p /opt/wpbackup-restore && cd /opt/wpbackup-restore && curl -L https://github.com/shrocktech/wpbackup-restore/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1 && chmod +x /opt/wpbackup-restore/install.sh /opt/wpbackup-restore/update.sh /opt/wpbackup-restore/wpbackup.sh /opt/wpbackup-restore/wprestore.sh && /opt/wpbackup-restore/install.sh
 ```
-- This downloads the latest files, sets permissions, installs Rclone (if needed), copies `rclone.conf.example` to `/root/.config/rclone/rclone.conf`, installs scripts to `/usr/local/bin`, and sets a cron job for daily backups at 2:00 AM.
+- This downloads the latest files, sets permissions, installs Rclone (if needed), copies `rclone.conf.example` to `/root/.config/rclone/rclone.conf`, installs `wpbackup`, `wprestore`, and `update-wpscripts` to `/usr/local/bin`, and sets a cron job for daily backups at 2:00 AM.
 
 ## Configuration
-Edit the Rclone configuration file with your IDrive credentials:
+Edit the Rclone configuration file with your S3-compatible storage credentials:
 ```bash
 nano /root/.config/rclone/rclone.conf
 ```
 Update with your details (replace placeholders):
 ```plaintext
-[IDrive]
+[S3Provider]
 type = s3
 provider = Other
 env_auth = false
@@ -36,11 +36,17 @@ secret_access_key = your_secret_key
 endpoint = your_endpoint_url
 no_check_bucket = true
 
-[IDriveBackup]
+[S3Backup]
 type = alias
-remote = IDrive:directory/backups
+remote = S3Provider:your-backup-directory
 ```
 Save (Ctrl+O, Enter, Ctrl+X) and exit.
+
+- **Test Rclone Configuration**: Verify connectivity with your S3-compatible storage:
+  ```bash
+  rclone lsd S3Provider:
+  ```
+  - This should list the directories in your storage. If it fails, check your credentials and endpoint in `/root/.config/rclone/rclone.conf`.
 
 ## Usage
 - **Backup a Site**:
@@ -61,7 +67,7 @@ To update to the latest version, use the installed `update-wpscripts` command:
 ```bash
 update-wpscripts
 ```
-- **Note**: This command downloads the latest tarball, updates `wpbackup` and `wprestore` in `/usr/local/bin`, and cleans up. If it fails (e.g., due to a corrupted setup), re-run the installation:
+- **Note**: This updates `wpbackup` and `wprestore` in `/usr/local/bin` using the latest tarball. If it fails (e.g., due to a corrupted setup), re-run the installation:
   ```bash
   rm -rf /opt/wpbackup-restore && mkdir -p /opt/wpbackup-restore && cd /opt/wpbackup-restore && curl -L https://github.com/shrocktech/wpbackup-restore/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1 && chmod +x /opt/wpbackup-restore/install.sh /opt/wpbackup-restore/update.sh /opt/wpbackup-restore/wpbackup.sh /opt/wpbackup-restore/wprestore.sh && /opt/wpbackup-restore/install.sh
   ```
