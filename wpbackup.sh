@@ -38,6 +38,7 @@ FULL_REMOTE_PATH="${REMOTE_NAME}${DAILY_FOLDER}"
 GLOBAL_LOG_FILE="${GLOBAL_LOG_FILE:-/var/log/wp-content-backup-summary.log}"
 TEMP_DIR=$(mktemp -d)
 BASE_DIR="${BASE_DIR:-/var/www}"
+LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-/var/backups/wordpress}"
 
 if [ "$DRYRUN" = true ]; then
     RCLONE_FLAGS="--dry-run"
@@ -128,6 +129,15 @@ apply_retention_policy() {
 # Perform backups
 echo "$(date): Backup process started." | tee -a "$GLOBAL_LOG_FILE"
 
+# Create local backup directory if it doesn't exist
+mkdir -p "$LOCAL_BACKUP_DIR"
+
+# Remove previous day's backups from local backup directory
+if [ "$DRYRUN" = false ]; then
+    echo "$(date): Cleaning up old local backups..." | tee -a "$GLOBAL_LOG_FILE"
+    find "$LOCAL_BACKUP_DIR" -name "*.tar.gz" -type f -mtime +1 -delete
+fi
+
 # Loop through WordPress installations
 for dir in "$BASE_DIR"/*/ ; do
     if [ -f "${dir}wp-config.php" ]; then
@@ -154,15 +164,25 @@ for dir in "$BASE_DIR"/*/ ; do
             if [ "$DRYRUN" = false ]; then
                 if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_NAME")" > /dev/null 2>&1; then
                     echo "$(date): Successfully uploaded $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
+                    
+                    # Keep a local copy of today's backup
+                    echo "$(date): Keeping local copy at $LOCAL_BACKUP_DIR/$(basename "$ARCHIVE_NAME")" | tee -a "$GLOBAL_LOG_FILE"
+                    cp "$ARCHIVE_NAME" "$LOCAL_BACKUP_DIR/"
                 else
                     echo "$(date): Error: Failed to verify upload of $ARCHIVE_NAME to $FULL_REMOTE_PATH." | tee -a "$GLOBAL_LOG_FILE"
                 fi
             fi
+            
+            # Clean up the original archive after copying it to local backup dir
+            rm -v "$ARCHIVE_NAME" "$SITE_LOG_FILE" "$DB_DUMP"
+        else
+            echo "$(date): Error: Database dump failed for $DOMAIN_NAME" | tee -a "$GLOBAL_LOG_FILE"
         fi
-
-        rm -v "$ARCHIVE_NAME" "$SITE_LOG_FILE" "$DB_DUMP"
     fi
 done
+
+# Clean up temp directory
+rm -rf "$TEMP_DIR"
 
 apply_retention_policy
 echo "$(date): Backup process completed successfully." | tee -a "$GLOBAL_LOG_FILE"
