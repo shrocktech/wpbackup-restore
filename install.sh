@@ -38,7 +38,6 @@ else
     mkdir -p "$RCLONE_CONF_DIR"
     cp "$SCRIPT_DIR/rclone.conf.example" "$RCLONE_CONF_FILE"
     echo "Rclone configuration file copied to $RCLONE_CONF_FILE."
-    echo "Please edit $RCLONE_CONF_FILE with your S3-compatible storage credentials."
 fi
 
 # 3. Install scripts
@@ -74,8 +73,9 @@ else
     echo "Cron job set to run wpbackup daily at 2:00 AM. Logs will be written to $CRON_LOG."
 fi
 
+# Output the nano command first, followed by other messages
+echo "nano $RCLONE_CONF_FILE"
 echo "Installation completed successfully."
 echo "Next steps:"
-echo "1. Edit $RCLONE_CONF_FILE with your S3-compatible storage credentials."
-echo "2. Test the backup script: wpbackup --dry-run"
-echo "3. Test the restore script: wprestore --dry-run"
+echo "1. Test the backup script: wpbackup -dryrun"
+echo "2. Test the restore script: wprestore -dryrun"
