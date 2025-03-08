@@ -38,7 +38,7 @@ no_check_bucket = true
 
 [S3Backup]
 type = alias
-remote = MyS3Provider:your-backup-directory
+remote = MyS3Provider:bucketname
 ```
 Save (Ctrl+O, Enter, Ctrl+X) and exit.
 
