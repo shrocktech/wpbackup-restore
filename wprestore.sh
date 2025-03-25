@@ -331,12 +331,26 @@ esac
 if [ "$USE_LOCAL_BACKUP" = false ]; then
     # Find latest backup directory in S3
     echo "Looking for the latest backup directory in $FULL_REMOTE_PATH..." | tee -a "$LOG_FILE"
-    LATEST_DIR=$(rclone lsf "$FULL_REMOTE_PATH" --dirs-only | sort -r | head -n 1)
+    
+    # Debug: Log the full list of directories
+    echo "Full list of directories in $FULL_REMOTE_PATH:" | tee -a "$LOG_FILE"
+    rclone lsf "$FULL_REMOTE_PATH" --dirs-only --no-check-dest | tee -a "$LOG_FILE"
+    
+    # Find the latest directory, filtering for the expected format (YYYYMMDD_Daily_Backup_Job/)
+    LATEST_DIR=$(rclone lsf "$FULL_REMOTE_PATH" --dirs-only --no-check-dest | grep -E '^[0-9]{8}_Daily_Backup_Job/' | sort -r | head -n 1)
 
+    # Check if a directory was found
     if [ -z "$LATEST_DIR" ]; then
-        echo "Error: No backup directories found in the S3 bucket. Please check your configuration." | tee -a "$LOG_FILE"
+        echo "Error: No backup directories found in the S3 bucket matching the expected format (YYYYMMDD_Daily_Backup_Job/)." | tee -a "$LOG_FILE"
         exit 1
     fi
+
+    # Verify the directory exists
+    if ! rclone lsd "$FULL_REMOTE_PATH/$LATEST_DIR" >/dev/null 2>&1; then
+        echo "Error: Latest directory $LATEST_DIR does not exist or is inaccessible." | tee -a "$LOG_FILE"
+        exit 1
+    fi
+
     echo "Latest backup directory found: $LATEST_DIR" | tee -a "$LOG_FILE"
 
     # Find backup file for the domain
@@ -344,43 +358,11 @@ if [ "$USE_LOCAL_BACKUP" = false ]; then
     LATEST_BACKUP=$(rclone lsf "$FULL_REMOTE_PATH/$LATEST_DIR/" --include "${DOMAIN}*" | sort -r | head -n 1)
 
     if [ -z "$LATEST_BACKUP" ]; then
-        echo "Error: No backup files found for $DOMAIN." | tee -a "$LOG_FILE"
+        echo "Error: No backup files found for $DOMAIN in $FULL_REMOTE_PATH/$LATEST_DIR/." | tee -a "$LOG_FILE"
         exit 1
     fi
     echo "Latest backup file found: $LATEST_BACKUP" | tee -a "$LOG_FILE"
 fi
-
-# Prompt for restore type
-echo "Please choose restore type:"
-echo "1) Full restore (wp-content + database)"
-echo "2) Database restore only" 
-echo "3) Cancel"
-echo ""
-echo "Default: Option 1 will be selected in 15 seconds..."
-
-read -t 15 -p "Enter your choice (1-3): " RESTORE_CHOICE || true
-
-if [ -z "$RESTORE_CHOICE" ]; then
-    echo "No input received, defaulting to full restore"
-    RESTORE_CHOICE=1
-fi
-
-case "$RESTORE_CHOICE" in
-    1)
-        echo "Proceeding with full restore..." | tee -a "$LOG_FILE"
-        RESTORE_DATABASE=true
-        RESTORE_WP_CONTENT=true
-        ;;
-    2)
-        echo "Proceeding with database restore only..." | tee -a "$LOG_FILE"
-        RESTORE_DATABASE=true
-        RESTORE_WP_CONTENT=false
-        ;;
-    *)
-        echo "Restore canceled by user." | tee -a "$LOG_FILE"
-        exit 0
-        ;;
-esac
 
 # ---------------------------
 # Step 6: Check Space and Download/Copy the Backup
