@@ -329,38 +329,50 @@ esac
 # Step 5: Find Backup Files
 # ---------------------------
 if [ "$USE_LOCAL_BACKUP" = false ]; then
-    # Find latest backup directory in S3
-    echo "Looking for the latest backup directory in $FULL_REMOTE_PATH..." | tee -a "$LOG_FILE"
+    # Find the latest backup directory in S3 that contains a backup file for the domain
+    echo "Looking for the latest backup directory in $FULL_REMOTE_PATH containing a backup for '$DOMAIN'..." | tee -a "$LOG_FILE"
     
     # Debug: Log the full list of directories
     echo "Full list of directories in $FULL_REMOTE_PATH:" | tee -a "$LOG_FILE"
     rclone lsf "$FULL_REMOTE_PATH" --dirs-only --no-check-dest | tee -a "$LOG_FILE"
     
-    # Find the latest directory, filtering for the expected format (YYYYMMDD_Daily_Backup_Job/)
-    LATEST_DIR=$(rclone lsf "$FULL_REMOTE_PATH" --dirs-only --no-check-dest | grep -E '^[0-9]{8}_Daily_Backup_Job/' | sort -r | head -n 1)
+    # Get the list of directories in reverse chronological order
+    DIRECTORIES=$(rclone lsf "$FULL_REMOTE_PATH" --dirs-only --no-check-dest | grep -E '^[0-9]{8}_Daily_Backup_Job/' | sort -r)
 
-    # Check if a directory was found
-    if [ -z "$LATEST_DIR" ]; then
+    # Check if any directories were found
+    if [ -z "$DIRECTORIES" ]; then
         echo "Error: No backup directories found in the S3 bucket matching the expected format (YYYYMMDD_Daily_Backup_Job/)." | tee -a "$LOG_FILE"
         exit 1
     fi
 
-    # Verify the directory exists
-    if ! rclone lsd "$FULL_REMOTE_PATH/$LATEST_DIR" >/dev/null 2>&1; then
-        echo "Error: Latest directory $LATEST_DIR does not exist or is inaccessible." | tee -a "$LOG_FILE"
+    # Iterate through directories to find the first one containing a backup file for the domain
+    LATEST_DIR=""
+    LATEST_BACKUP=""
+    for DIR in $DIRECTORIES; do
+        echo "Checking directory: $DIR" | tee -a "$LOG_FILE"
+        # Verify the directory exists
+        if rclone lsd "$FULL_REMOTE_PATH/$DIR" >/dev/null 2>&1; then
+            # Look for a backup file matching the domain
+            BACKUP_FILE=$(rclone lsf "$FULL_REMOTE_PATH/$DIR" --include "${DOMAIN}*" | sort -r | head -n 1)
+            if [ ! -z "$BACKUP_FILE" ]; then
+                LATEST_DIR="$DIR"
+                LATEST_BACKUP="$BACKUP_FILE"
+                break
+            else
+                echo "No backup file found for '$DOMAIN' in $DIR" | tee -a "$LOG_FILE"
+            fi
+        else
+            echo "Directory $DIR does not exist or is inaccessible." | tee -a "$LOG_FILE"
+        fi
+    done
+
+    # Check if a suitable directory and backup file were found
+    if [ -z "$LATEST_DIR" ] || [ -z "$LATEST_BACKUP" ]; then
+        echo "Error: No backup files found for $DOMAIN in any directory." | tee -a "$LOG_FILE"
         exit 1
     fi
 
     echo "Latest backup directory found: $LATEST_DIR" | tee -a "$LOG_FILE"
-
-    # Find backup file for the domain
-    echo "Looking for the latest backup file for '$DOMAIN' in $FULL_REMOTE_PATH/$LATEST_DIR/..." | tee -a "$LOG_FILE"
-    LATEST_BACKUP=$(rclone lsf "$FULL_REMOTE_PATH/$LATEST_DIR/" --include "${DOMAIN}*" | sort -r | head -n 1)
-
-    if [ -z "$LATEST_BACKUP" ]; then
-        echo "Error: No backup files found for $DOMAIN in $FULL_REMOTE_PATH/$LATEST_DIR/." | tee -a "$LOG_FILE"
-        exit 1
-    fi
     echo "Latest backup file found: $LATEST_BACKUP" | tee -a "$LOG_FILE"
 fi
 
