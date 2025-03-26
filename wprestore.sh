@@ -142,7 +142,44 @@ if [[ "$1" == "-dryrun" ]]; then
 else
     DRYRUN=false
 fi
-echo "DEBUG: DRYRUN=$DRYRUN, First argument ($1)"  # Debug statement
+
+# Debug: Confirm reaching the restore type prompt
+echo "DEBUG: About to prompt for restore type, DRYRUN=$DRYRUN" | tee -a "$LOG_FILE"
+
+# Prompt for restore type
+echo "Please choose restore type:"
+echo "1) Full restore (wp-content + database)"
+echo "2) Database restore only"
+echo "3) Cancel"
+echo ""
+echo "Default: Option 1 will be selected in 15 seconds..."
+
+read -t 15 -p "Enter your choice (1-3): " RESTORE_CHOICE || true
+
+if [ -z "$RESTORE_CHOICE" ]; then
+    echo "No input received, defaulting to full restore"
+    RESTORE_CHOICE=1
+fi
+
+case "$RESTORE_CHOICE" in
+    1)
+        echo "Proceeding with full restore..." | tee -a "$LOG_FILE"
+        RESTORE_DATABASE=true
+        RESTORE_WP_CONTENT=true
+        ;;
+    2)
+        echo "Proceeding with database restore only..." | tee -a "$LOG_FILE"
+        RESTORE_DATABASE=true
+        RESTORE_WP_CONTENT=false
+        ;;
+    *)
+        echo "Restore canceled by user." | tee -a "$LOG_FILE"
+        exit 0
+        ;;
+esac
+
+# Debug: Confirm restore type selection
+echo "DEBUG: RESTORE_DATABASE=$RESTORE_DATABASE, RESTORE_WP_CONTENT=$RESTORE_WP_CONTENT" | tee -a "$LOG_FILE"
 
 # Ensure pv is installed for progress monitoring
 ensure_pv_installed
@@ -438,7 +475,6 @@ else
     fi
 fi
 
-# Rest of the restore script follows (Steps 7-12) unchanged
 # ---------------------------
 # Step 7: Extract Database Credentials from EXISTING Site
 # ---------------------------
