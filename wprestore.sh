@@ -142,6 +142,7 @@ if [[ "$1" == "-dryrun" ]]; then
 else
     DRYRUN=false
 fi
+echo "DEBUG: DRYRUN=$DRYRUN, First argument ($1)"  # Debug statement
 
 # Ensure pv is installed for progress monitoring
 ensure_pv_installed
