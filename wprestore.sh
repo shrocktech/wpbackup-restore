@@ -142,6 +142,70 @@ if [[ "$1" == "-dryrun" ]]; then
 else
     DRYRUN=false
 fi
+echo "DEBUG: DRYRUN=$DRYRUN, First argument ($1)" | tee -a "$LOG_FILE"
+
+# ---------------------------
+# Step 1.5: Prompt for Domain Name and Set Up Paths
+# ---------------------------
+read -p "Enter the domain name to restore (e.g., websitedomain.com): " DOMAIN
+
+# Define default paths
+DEFAULT_WP_PATH="/var/www"
+echo "Default WordPress path is: $DEFAULT_WP_PATH"
+read -p "Use default path? [Y/n]: " USE_DEFAULT_PATH
+
+if [[ "$USE_DEFAULT_PATH" =~ ^[Nn] ]]; then
+    read -p "Enter alternative WordPress installation path: " WP_BASE_PATH
+else
+    WP_BASE_PATH="$DEFAULT_WP_PATH"
+fi
+
+# Define paths
+WP_INSTALL_DIR="$WP_BASE_PATH/$DOMAIN"
+TIMESTAMP=$(date +%m%d%Y)
+RESTORE_DIR="$WP_INSTALL_DIR/wprestore_$TIMESTAMP"
+LOG_FILE="$RESTORE_DIR/wprestore.log" # Log file for restore actions
+
+# Create .htaccess for restore directory
+create_htaccess() {
+    local htaccess="$1/.htaccess"
+    echo "Order Deny,Allow" > "$htaccess"
+    echo "Deny from all" >> "$htaccess"
+}
+
+# Create restore directory with protection
+if ! mkdir -p "$RESTORE_DIR"; then
+    echo "Error: Failed to create restore directory at $RESTORE_DIR"
+    exit 1
+fi
+create_htaccess "$RESTORE_DIR"
+
+# Verify WordPress installation directory exists
+if [ ! -d "$WP_INSTALL_DIR" ]; then
+    echo "Error: WordPress installation directory not found at $WP_INSTALL_DIR"
+    echo "Please verify the domain name and ensure the WordPress installation exists."
+    exit 1
+else
+    echo "✓ Installation directory verified at $WP_INSTALL_DIR"
+fi
+
+# Verify it's a WordPress installation
+if [ ! -f "$WP_INSTALL_DIR/wp-config.php" ]; then
+    echo "Error: No WordPress installation found at $WP_INSTALL_DIR"
+    echo "Missing wp-config.php file. Please verify this is a valid WordPress site."
+    exit 1
+else
+    echo "✓ WordPress installation verified (wp-config.php found)"
+fi
+
+# Create log directory if it doesn't exist
+mkdir -p "$WP_INSTALL_DIR"
+
+# Initialize logging after we have the domain and paths set up
+if ! init_logging; then
+    echo "Error: Failed to initialize logging."
+    exit 1
+fi
 
 # Debug: Confirm reaching the restore type prompt
 echo "DEBUG: About to prompt for restore type, DRYRUN=$DRYRUN" | tee -a "$LOG_FILE"
@@ -204,91 +268,28 @@ FULL_REMOTE_PATH="${REMOTE_NAME}:"
 
 # Verify rclone configuration exists
 if [ ! -f "$RCLONE_CONF" ]; then
-    echo "Error: rclone configuration file not found at $RCLONE_CONF"
+    echo "Error: rclone configuration file not found at $RCLONE_CONF" | tee -a "$LOG_FILE"
     exit 1
 fi
 
 # Verify S3 remote exists in configuration
 if ! grep -q "\[$REMOTE_NAME\]" "$RCLONE_CONF"; then
-    echo "Error: S3 remote '$REMOTE_NAME' not found in rclone configuration"
+    echo "Error: S3 remote '$REMOTE_NAME' not found in rclone configuration" | tee -a "$LOG_FILE"
     exit 1
 fi
 
 # Verify S3 connection without logging
-echo "Verifying S3 connection and credentials..."
+echo "Verifying S3 connection and credentials..." | tee -a "$LOG_FILE"
 if ! rclone lsd "$FULL_REMOTE_PATH" >/dev/null 2>&1; then
-    echo "Error: Unable to connect to S3. Please check your credentials and configuration."
+    echo "Error: Unable to connect to S3. Please check your credentials and configuration." | tee -a "$LOG_FILE"
     exit 1
 fi
 
 # Only show success messages if verification passed
-echo "✓ S3 credentials verified successfully"
-echo "✓ Connected to S3 backup folder"
-echo "Using remote alias '$REMOTE_NAME' defined in rclone.conf."
-echo "----------------------------------------"
-
-# ---------------------------
-# Step 3: Prompt for Domain Name and Verify Installation
-# ---------------------------
-read -p "Enter the domain name to restore (e.g., websitedomain.com): " DOMAIN
-
-# Define default paths
-DEFAULT_WP_PATH="/var/www"
-echo "Default WordPress path is: $DEFAULT_WP_PATH"
-read -p "Use default path? [Y/n]: " USE_DEFAULT_PATH
-
-if [[ "$USE_DEFAULT_PATH" =~ ^[Nn] ]]; then
-    read -p "Enter alternative WordPress installation path: " WP_BASE_PATH
-else
-    WP_BASE_PATH="$DEFAULT_WP_PATH"
-fi
-
-# Define paths
-WP_INSTALL_DIR="$WP_BASE_PATH/$DOMAIN"
-TIMESTAMP=$(date +%m%d%Y)
-RESTORE_DIR="$WP_INSTALL_DIR/wprestore_$TIMESTAMP"
-LOG_FILE="$RESTORE_DIR/wprestore.log" # Log file for restore actions
-
-# Create .htaccess for restore directory
-create_htaccess() {
-    local htaccess="$1/.htaccess"
-    echo "Order Deny,Allow" > "$htaccess"
-    echo "Deny from all" >> "$htaccess"
-}
-
-# Create restore directory with protection
-if ! mkdir -p "$RESTORE_DIR"; then
-    echo "Error: Failed to create restore directory at $RESTORE_DIR"
-    exit 1
-fi
-create_htaccess "$RESTORE_DIR"
-
-# Verify WordPress installation directory exists
-if [ ! -d "$WP_INSTALL_DIR" ]; then
-    echo "Error: WordPress installation directory not found at $WP_INSTALL_DIR"
-    echo "Please verify the domain name and ensure the WordPress installation exists."
-    exit 1
-else
-    echo "✓ Installation directory verified at $WP_INSTALL_DIR"
-fi
-
-# Verify it's a WordPress installation
-if [ ! -f "$WP_INSTALL_DIR/wp-config.php" ]; then
-    echo "Error: No WordPress installation found at $WP_INSTALL_DIR"
-    echo "Missing wp-config.php file. Please verify this is a valid WordPress site."
-    exit 1
-else
-    echo "✓ WordPress installation verified (wp-config.php found)"
-fi
-
-# Create log directory if it doesn't exist
-mkdir -p "$WP_INSTALL_DIR"
-
-# Initialize logging after we have the domain and paths set up
-if ! init_logging; then
-    echo "Error: Failed to initialize logging."
-    exit 1
-fi
+echo "✓ S3 credentials verified successfully" | tee -a "$LOG_FILE"
+echo "✓ Connected to S3 backup folder" | tee -a "$LOG_FILE"
+echo "Using remote alias '$REMOTE_NAME' defined in rclone.conf." | tee -a "$LOG_FILE"
+echo "----------------------------------------" | tee -a "$LOG_FILE"
 
 # Log initial information with improved formatting
 echo "=== WordPress Restore Process Initiated ===" | tee -a "$LOG_FILE"
