@@ -142,10 +142,55 @@ if [[ "$1" == "-dryrun" ]]; then
 else
     DRYRUN=false
 fi
-echo "DEBUG: DRYRUN=$DRYRUN, First argument ($1)" | tee -a "$LOG_FILE"
+
+# Ensure pv is installed for progress monitoring
+ensure_pv_installed
 
 # ---------------------------
-# Step 1.5: Prompt for Domain Name and Set Up Paths
+# Step 2: Configure Backup Sources
+# ---------------------------
+# Set local backup directory
+LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-/var/backups/wordpress_backups}"
+
+# Configure S3 backup source
+DEFAULT_RCLONE_CONF="/root/.config/rclone/rclone.conf"
+if [ ! -f "$DEFAULT_RCLONE_CONF" ]; then
+    echo "Default rclone configuration not found at $DEFAULT_RCLONE_CONF"
+    read -p "Enter alternative rclone.conf path: " RCLONE_CONF
+else
+    RCLONE_CONF="$DEFAULT_RCLONE_CONF"
+fi
+
+REMOTE_NAME="S3Backup"
+FULL_REMOTE_PATH="${REMOTE_NAME}:"
+
+# Verify rclone configuration exists
+if [ ! -f "$RCLONE_CONF" ]; then
+    echo "Error: rclone configuration file not found at $RCLONE_CONF"
+    exit 1
+fi
+
+# Verify S3 remote exists in configuration
+if ! grep -q "\[$REMOTE_NAME\]" "$RCLONE_CONF"; then
+    echo "Error: S3 remote '$REMOTE_NAME' not found in rclone configuration"
+    exit 1
+fi
+
+# Verify S3 connection without logging
+echo "Verifying S3 connection and credentials..."
+if ! rclone lsd "$FULL_REMOTE_PATH" >/dev/null 2>&1; then
+    echo "Error: Unable to connect to S3. Please check your credentials and configuration."
+    exit 1
+fi
+
+# Only show success messages if verification passed
+echo "✓ S3 credentials verified successfully"
+echo "✓ Connected to S3 backup folder"
+echo "Using remote alias '$REMOTE_NAME' defined in rclone.conf."
+echo "----------------------------------------"
+
+# ---------------------------
+# Step 3: Prompt for Domain Name and Verify Installation
 # ---------------------------
 read -p "Enter the domain name to restore (e.g., websitedomain.com): " DOMAIN
 
@@ -206,90 +251,6 @@ if ! init_logging; then
     echo "Error: Failed to initialize logging."
     exit 1
 fi
-
-# Debug: Confirm reaching the restore type prompt
-echo "DEBUG: About to prompt for restore type, DRYRUN=$DRYRUN" | tee -a "$LOG_FILE"
-
-# Prompt for restore type
-echo "Please choose restore type:"
-echo "1) Full restore (wp-content + database)"
-echo "2) Database restore only"
-echo "3) Cancel"
-echo ""
-echo "Default: Option 1 will be selected in 15 seconds..."
-
-read -t 15 -p "Enter your choice (1-3): " RESTORE_CHOICE || true
-
-if [ -z "$RESTORE_CHOICE" ]; then
-    echo "No input received, defaulting to full restore"
-    RESTORE_CHOICE=1
-fi
-
-case "$RESTORE_CHOICE" in
-    1)
-        echo "Proceeding with full restore..." | tee -a "$LOG_FILE"
-        RESTORE_DATABASE=true
-        RESTORE_WP_CONTENT=true
-        ;;
-    2)
-        echo "Proceeding with database restore only..." | tee -a "$LOG_FILE"
-        RESTORE_DATABASE=true
-        RESTORE_WP_CONTENT=false
-        ;;
-    *)
-        echo "Restore canceled by user." | tee -a "$LOG_FILE"
-        exit 0
-        ;;
-esac
-
-# Debug: Confirm restore type selection
-echo "DEBUG: RESTORE_DATABASE=$RESTORE_DATABASE, RESTORE_WP_CONTENT=$RESTORE_WP_CONTENT" | tee -a "$LOG_FILE"
-
-# Ensure pv is installed for progress monitoring
-ensure_pv_installed
-
-# ---------------------------
-# Step 2: Configure Backup Sources
-# ---------------------------
-# Set local backup directory
-LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-/var/backups/wordpress_backups}"
-
-# Configure S3 backup source
-DEFAULT_RCLONE_CONF="/root/.config/rclone/rclone.conf"
-if [ ! -f "$DEFAULT_RCLONE_CONF" ]; then
-    echo "Default rclone configuration not found at $DEFAULT_RCLONE_CONF"
-    read -p "Enter alternative rclone.conf path: " RCLONE_CONF
-else
-    RCLONE_CONF="$DEFAULT_RCLONE_CONF"
-fi
-
-REMOTE_NAME="S3Backup"
-FULL_REMOTE_PATH="${REMOTE_NAME}:"
-
-# Verify rclone configuration exists
-if [ ! -f "$RCLONE_CONF" ]; then
-    echo "Error: rclone configuration file not found at $RCLONE_CONF" | tee -a "$LOG_FILE"
-    exit 1
-fi
-
-# Verify S3 remote exists in configuration
-if ! grep -q "\[$REMOTE_NAME\]" "$RCLONE_CONF"; then
-    echo "Error: S3 remote '$REMOTE_NAME' not found in rclone configuration" | tee -a "$LOG_FILE"
-    exit 1
-fi
-
-# Verify S3 connection without logging
-echo "Verifying S3 connection and credentials..." | tee -a "$LOG_FILE"
-if ! rclone lsd "$FULL_REMOTE_PATH" >/dev/null 2>&1; then
-    echo "Error: Unable to connect to S3. Please check your credentials and configuration." | tee -a "$LOG_FILE"
-    exit 1
-fi
-
-# Only show success messages if verification passed
-echo "✓ S3 credentials verified successfully" | tee -a "$LOG_FILE"
-echo "✓ Connected to S3 backup folder" | tee -a "$LOG_FILE"
-echo "Using remote alias '$REMOTE_NAME' defined in rclone.conf." | tee -a "$LOG_FILE"
-echo "----------------------------------------" | tee -a "$LOG_FILE"
 
 # Log initial information with improved formatting
 echo "=== WordPress Restore Process Initiated ===" | tee -a "$LOG_FILE"
@@ -368,52 +329,58 @@ esac
 # Step 5: Find Backup Files
 # ---------------------------
 if [ "$USE_LOCAL_BACKUP" = false ]; then
-    # Find the latest backup directory in S3 that contains a backup file for the domain
-    echo "Looking for the latest backup directory in $FULL_REMOTE_PATH containing a backup for '$DOMAIN'..." | tee -a "$LOG_FILE"
-    
-    # Debug: Log the full list of directories
-    echo "Full list of directories in $FULL_REMOTE_PATH:" | tee -a "$LOG_FILE"
-    rclone lsf "$FULL_REMOTE_PATH" --dirs-only --no-check-dest | tee -a "$LOG_FILE"
-    
-    # Get the list of directories in reverse chronological order
-    DIRECTORIES=$(rclone lsf "$FULL_REMOTE_PATH" --dirs-only --no-check-dest | grep -E '^[0-9]{8}_Daily_Backup_Job/' | sort -r)
+    # Find latest backup directory in S3
+    echo "Looking for the latest backup directory in $FULL_REMOTE_PATH..." | tee -a "$LOG_FILE"
+    LATEST_DIR=$(rclone lsf "$FULL_REMOTE_PATH" --dirs-only | sort -r | head -n 1)
 
-    # Check if any directories were found
-    if [ -z "$DIRECTORIES" ]; then
-        echo "Error: No backup directories found in the S3 bucket matching the expected format (YYYYMMDD_Daily_Backup_Job/)." | tee -a "$LOG_FILE"
+    if [ -z "$LATEST_DIR" ]; then
+        echo "Error: No backup directories found in the S3 bucket. Please check your configuration." | tee -a "$LOG_FILE"
         exit 1
     fi
-
-    # Iterate through directories to find the first one containing a backup file for the domain
-    LATEST_DIR=""
-    LATEST_BACKUP=""
-    for DIR in $DIRECTORIES; do
-        echo "Checking directory: $DIR" | tee -a "$LOG_FILE"
-        # Verify the directory exists
-        if rclone lsd "$FULL_REMOTE_PATH/$DIR" >/dev/null 2>&1; then
-            # Look for a backup file matching the domain
-            BACKUP_FILE=$(rclone lsf "$FULL_REMOTE_PATH/$DIR" --include "${DOMAIN}*" | sort -r | head -n 1)
-            if [ ! -z "$BACKUP_FILE" ]; then
-                LATEST_DIR="$DIR"
-                LATEST_BACKUP="$BACKUP_FILE"
-                break
-            else
-                echo "No backup file found for '$DOMAIN' in $DIR" | tee -a "$LOG_FILE"
-            fi
-        else
-            echo "Directory $DIR does not exist or is inaccessible." | tee -a "$LOG_FILE"
-        fi
-    done
-
-    # Check if a suitable directory and backup file were found
-    if [ -z "$LATEST_DIR" ] || [ -z "$LATEST_BACKUP" ]; then
-        echo "Error: No backup files found for $DOMAIN in any directory." | tee -a "$LOG_FILE"
-        exit 1
-    fi
-
     echo "Latest backup directory found: $LATEST_DIR" | tee -a "$LOG_FILE"
+
+    # Find backup file for the domain
+    echo "Looking for the latest backup file for '$DOMAIN' in $FULL_REMOTE_PATH/$LATEST_DIR/..." | tee -a "$LOG_FILE"
+    LATEST_BACKUP=$(rclone lsf "$FULL_REMOTE_PATH/$LATEST_DIR/" --include "${DOMAIN}*" | sort -r | head -n 1)
+
+    if [ -z "$LATEST_BACKUP" ]; then
+        echo "Error: No backup files found for $DOMAIN." | tee -a "$LOG_FILE"
+        exit 1
+    fi
     echo "Latest backup file found: $LATEST_BACKUP" | tee -a "$LOG_FILE"
 fi
+
+# Prompt for restore type
+echo "Please choose restore type:"
+echo "1) Full restore (wp-content + database)"
+echo "2) Database restore only" 
+echo "3) Cancel"
+echo ""
+echo "Default: Option 1 will be selected in 15 seconds..."
+
+read -t 15 -p "Enter your choice (1-3): " RESTORE_CHOICE || true
+
+if [ -z "$RESTORE_CHOICE" ]; then
+    echo "No input received, defaulting to full restore"
+    RESTORE_CHOICE=1
+fi
+
+case "$RESTORE_CHOICE" in
+    1)
+        echo "Proceeding with full restore..." | tee -a "$LOG_FILE"
+        RESTORE_DATABASE=true
+        RESTORE_WP_CONTENT=true
+        ;;
+    2)
+        echo "Proceeding with database restore only..." | tee -a "$LOG_FILE"
+        RESTORE_DATABASE=true
+        RESTORE_WP_CONTENT=false
+        ;;
+    *)
+        echo "Restore canceled by user." | tee -a "$LOG_FILE"
+        exit 0
+        ;;
+esac
 
 # ---------------------------
 # Step 6: Check Space and Download/Copy the Backup
@@ -476,6 +443,7 @@ else
     fi
 fi
 
+# Rest of the restore script follows (Steps 7-12) unchanged
 # ---------------------------
 # Step 7: Extract Database Credentials from EXISTING Site
 # ---------------------------
