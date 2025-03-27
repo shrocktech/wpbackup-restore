@@ -45,7 +45,7 @@ INSTALL_DIR="/usr/local/bin"
 echo "Listing files in $SCRIPT_DIR for debugging:"
 ls -l "$SCRIPT_DIR"
 
-for script in wpbackup wprestore update; do
+for script in wpbackup wprestore cleanup update; do
     if [ ! -f "$SCRIPT_DIR/${script}.sh" ]; then
         echo "Error: ${script}.sh not found in $SCRIPT_DIR."
         exit 1
@@ -55,6 +55,10 @@ for script in wpbackup wprestore update; do
         cp "$SCRIPT_DIR/${script}.sh" "$INSTALL_DIR/update-wpscripts"
         chmod +x "$INSTALL_DIR/update-wpscripts"
         echo "Installed update-wpscripts to $INSTALL_DIR/update-wpscripts."
+    elif [ "$script" = "cleanup" ]; then
+        cp "$SCRIPT_DIR/${script}.sh" "$INSTALL_DIR/wpcleanup"
+        chmod +x "$INSTALL_DIR/wpcleanup"
+        echo "Installed wpcleanup to $INSTALL_DIR/wpcleanup."
     else
         cp "$SCRIPT_DIR/${script}.sh" "$INSTALL_DIR/$script"
         chmod +x "$INSTALL_DIR/$script"
@@ -79,3 +83,4 @@ echo "Next steps:"
 echo "1. nano $RCLONE_CONF_FILE"
 echo "2. Test the backup script: wpbackup -dryrun"
 echo "3. Test the restore script: wprestore -dryrun"
+echo "4. Test the cleanup script: wpcleanup -dryrun"

@@ -6,6 +6,7 @@ A collection of scripts to backup and restore WordPress sites using Rclone and S
 - **Backup**: Backs up WordPress sites (database, `wp-content`, `wp-config.php`) and uploads to S3-compatible storage.
 - **Local Backup**: Keeps recent backups locally for faster restores.
 - **Restore**: Restores WordPress sites from either local or S3 backups with database and file options.
+- **Object Cache Cleanup**: Utility to remove `object-cache` files that may cause issues after migrations or restores.
 - **Retention Policy**: Manages backup retention (7 days daily, 28 days weekly, 90 days monthly).
 - **Easy Updates**: Update scripts with a single command.
 
@@ -74,6 +75,18 @@ A cron job is set to run `wpbackup` daily at 2:00 AM, logging to `/var/log/wpbac
 - **Modify Time** (e.g., to 3:00 AM): `crontab -e`, update to `0 3 * * * /usr/local/bin/wpbackup >> /var/log/wpbackup.log 2>&1`, save and exit.
 - **Manual Add (if needed)**: `(crontab -l 2>/dev/null; echo "0 2 * * * /usr/local/bin/wpbackup >> /var/log/wpbackup.log 2>&1") | crontab -`
 
+## Object Cache Cleanup
+The `wpcleanup` utility resolves issues that may occur after migrations or restores due to persistent object caching:
+- **Single Site Mode**: Clean a specific domain's object cache
+- **Bulk Mode**: Remove object-cache files from all WordPress sites in the defined path
+- **Automatic During Restore**: During restores, object-cache.php is automatically removed if present
+
+This is particularly useful when:
+- A site experiences strange behavior after migration
+- Pages load inconsistently after a restore
+- Admin area shows outdated information
+- Object caching plugins were previously installed
+
 ## Updating Scripts
 To update to the latest version, use the installed `update-wpscripts` command:
 ```bash
@@ -81,7 +94,7 @@ update-wpscripts
 ```
 - **Note**: This updates `wpbackup` and `wprestore` in `/usr/local/bin` using the latest tarball. If it fails (e.g., due to a corrupted setup), re-run the installation:
   ```bash
-  rm -rf /opt/wpbackup-restore && mkdir -p /opt/wpbackup-restore && curl -L https://github.com/shrocktech/wpbackup-restore/archive/refs/heads/main.tar.gz | tar -xz -C /opt/wpbackup-restore --strip-components=1 && chmod +x /opt/wpbackup-restore/install.sh /opt/wpbackup-restore/update.sh /opt/wpbackup-restore/wpbackup.sh /opt/wpbackup-restore/wprestore.sh && /opt/wpbackup-restore/install.sh
+  rm -rf /opt/wpbackup-restore && mkdir -p /opt/wpbackup-restore && curl -L https://github.com/shrocktech/wpbackup-restore/archive/refs/heads/main.tar.gz | tar -xz -C /opt/wpbackup-restore --strip-components=1 && chmod +x /opt/wpbackup-restore/install.sh /opt/wpbackup-restore/update.sh /opt/wpbackup-restore/wpbackup.sh /opt/wpbackup-restore/wprestore.sh /opt/wpbackup-restore/cleanup.sh && /opt/wpbackup-restore/install.sh
   ```
 
 ## Configuration Options
