@@ -75,17 +75,16 @@ A cron job is set to run `wpbackup` daily at 2:00 AM, logging to `/var/log/wpbac
 - **Modify Time** (e.g., to 3:00 AM): `crontab -e`, update to `0 3 * * * /usr/local/bin/wpbackup >> /var/log/wpbackup.log 2>&1`, save and exit.
 - **Manual Add (if needed)**: `(crontab -l 2>/dev/null; echo "0 2 * * * /usr/local/bin/wpbackup >> /var/log/wpbackup.log 2>&1") | crontab -`
 
-## Object Cache Cleanup
-The `wpcleanup` utility resolves issues that may occur after migrations or restores due to persistent object caching:
-- **Single Site Mode**: Clean a specific domain's object cache
-- **Bulk Mode**: Remove object-cache files from all WordPress sites in the defined path
-- **Automatic During Restore**: During restores, object-cache.php is automatically removed if present
+## WP Cleanup
+The `wpcleanup` utility removes files from WordPress installations that are no longer needed:
 
-This is particularly useful when:
-- A site experiences strange behavior after migration
-- Pages load inconsistently after a restore
-- Admin area shows outdated information
-- Object caching plugins were previously installed
+- Removes all files and directories for specified domains
+- Cleans up backup archives and restore directories
+- Helps reclaim disk space after site decommissioning
+
+Usage: `wpcleanup domainname.com`
+
+Cleanup operations are logged to `/var/log/wpsitecleanup.log`.
 
 ## Updating Scripts
 To update to the latest version, use the installed `update-wpscripts` command:

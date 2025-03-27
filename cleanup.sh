@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# WordPress Cache Cleanup Script
-# This script removes object-cache.php files from all WordPress installations
-# Usage: wpcleanup [domain] or wpcleanup -all
+# WordPress Site Removal Script
+# This script removes all files from a deleted WordPress installation
+# Usage: wpremove domain.com
 
 set -e
 
@@ -12,81 +12,73 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Default path for WordPress installations
-BASE_DIR="${BASE_DIR:-/var/www}"
-LOG_FILE="/var/log/wpcleanup.log"
-
-# Initialize log file
-echo "=== WordPress Cache Cleanup Started at $(date) ===" > "$LOG_FILE"
-
-# Function to clean a specific domain
-cleanup_domain() {
-    local domain="$1"
-    local wp_dir="$BASE_DIR/$domain"
-    
-    echo "Processing site: $domain" | tee -a "$LOG_FILE"
-    
-    # Verify WordPress installation
-    if [ ! -f "$wp_dir/wp-config.php" ]; then
-        echo "Error: No WordPress installation found at $wp_dir" | tee -a "$LOG_FILE"
-        return 1
-    fi
-    
-    # Check for object-cache.php
-    OBJECT_CACHE_FILE="$wp_dir/wp-content/object-cache.php"
-    if [ -f "$OBJECT_CACHE_FILE" ]; then
-        echo "Found object-cache.php file, removing it to prevent potential issues..." | tee -a "$LOG_FILE"
-        if rm "$OBJECT_CACHE_FILE"; then
-            echo "✓ object-cache.php removed successfully for $domain" | tee -a "$LOG_FILE"
-            return 0
-        else
-            echo "Warning: Failed to remove object-cache.php file for $domain" | tee -a "$LOG_FILE"
-            return 1
-        fi
-    else
-        echo "No object-cache.php file found for $domain" | tee -a "$LOG_FILE"
-        return 0
-    fi
-}
-
-# Main script logic
-if [ "$1" == "-all" ]; then
-    echo "Cleaning all WordPress installations in $BASE_DIR..." | tee -a "$LOG_FILE"
-    
-    # Counter variables
-    total_sites=0
-    cleaned_sites=0
-    
-    # Process all WordPress installations
-    for dir in "$BASE_DIR"/*/ ; do
-        if [ -f "${dir}wp-config.php" ]; then
-            domain=$(basename "$dir")
-            ((total_sites++))
-            
-            if cleanup_domain "$domain"; then
-                ((cleaned_sites++))
-            fi
-        fi
-    done
-    
-    echo "----------------------------------------" | tee -a "$LOG_FILE"
-    echo "Cleanup process completed" | tee -a "$LOG_FILE"
-    echo "Total WordPress sites found: $total_sites" | tee -a "$LOG_FILE"
-    echo "Sites processed successfully: $cleaned_sites" | tee -a "$LOG_FILE"
-    
-elif [ -n "$1" ]; then
-    # Clean specific domain
-    cleanup_domain "$1"
-else
-    echo "Usage: wpcleanup [domain] or wpcleanup -all" | tee -a "$LOG_FILE"
-    echo ""
-    echo "Options:"
-    echo "  [domain]    Clean object-cache.php for a specific domain"
-    echo "  -all        Clean object-cache.php for all WordPress installations"
-    echo ""
-    echo "Example:"
-    echo "  wpcleanup example.com    # Clean only example.com"
-    echo "  wpcleanup -all           # Clean all WordPress sites"
+# Check if domain was provided
+if [ -z "$1" ]; then
+    echo "Error: Please provide the domain name to clean up."
+    echo "Usage: wpremove domain.com"
+    exit 1
 fi
 
-echo "Cleanup process completed at $(date)" | tee -a "$LOG_FILE"
+DOMAIN="$1"
+BASE_DIR="${BASE_DIR:-/var/www}"
+SITE_DIR="$BASE_DIR/$DOMAIN"
+LOG_FILE="/var/log/wpsitecleanup.log"
+
+# Initialize log file
+echo "=== WordPress Site Cleanup for $DOMAIN Started at $(date) ===" | tee -a "$LOG_FILE"
+
+# Check if site directory exists
+if [ -d "$SITE_DIR" ]; then
+    echo "Found site directory: $SITE_DIR" | tee -a "$LOG_FILE"
+    echo "Removing site files..." | tee -a "$LOG_FILE"
+    
+    # Calculate disk space to be freed
+    SPACE_FREED=$(du -sh "$SITE_DIR" | cut -f1)
+    
+    rm -rf "$SITE_DIR"
+    echo "✓ Removed site directory, freed approximately $SPACE_FREED" | tee -a "$LOG_FILE"
+else
+    echo "Site directory not found at $SITE_DIR" | tee -a "$LOG_FILE"
+fi
+
+# Look for restore directories
+RESTORE_DIRS=$(find "$BASE_DIR" -maxdepth 1 -name "wprestore_*_$DOMAIN" -o -name "$DOMAIN*_wprestore_*" -o -name "wprestore_*" -type d 2>/dev/null | grep -i "$DOMAIN" || true)
+
+if [ -n "$RESTORE_DIRS" ]; then
+    echo "Found restore directories:" | tee -a "$LOG_FILE"
+    echo "$RESTORE_DIRS" | tee -a "$LOG_FILE"
+    
+    for dir in $RESTORE_DIRS; do
+        SPACE_FREED=$(du -sh "$dir" | cut -f1)
+        rm -rf "$dir"
+        echo "✓ Removed restore directory: $dir (freed approximately $SPACE_FREED)" | tee -a "$LOG_FILE"
+    done
+fi
+
+# Look for backup files
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/wordpress_backups}"
+if [ -d "$BACKUP_DIR" ]; then
+    BACKUP_FILES=$(find "$BACKUP_DIR" -name "${DOMAIN}*.tar.gz" -type f 2>/dev/null || true)
+    
+    if [ -n "$BACKUP_FILES" ]; then
+        echo "Found backup files:" | tee -a "$LOG_FILE"
+        echo "$BACKUP_FILES" | tee -a "$LOG_FILE"
+        
+        TOTAL_SIZE=$(du -ch $BACKUP_FILES | grep total$ | cut -f1)
+        rm -f $BACKUP_FILES
+        echo "✓ Removed backup files, freed approximately $TOTAL_SIZE" | tee -a "$LOG_FILE"
+    else
+        echo "No backup files found for $DOMAIN" | tee -a "$LOG_FILE"
+    fi
+fi
+
+echo "----------------------------------------" | tee -a "$LOG_FILE"
+echo "Cleanup process completed for $DOMAIN at $(date)" | tee -a "$LOG_FILE"
+echo ""
+echo "To remove any associated databases, use the following commands:"
+echo "  mysql -e \"SHOW DATABASES LIKE '${DOMAIN%%.*}_%';\"  # To find matching databases"
+echo "  mysql -e \"DROP DATABASE database_name;\"  # To remove a specific database"
+
+# Show total space freed
+echo ""
+echo "Space freed during cleanup process is logged in $LOG_FILE"
