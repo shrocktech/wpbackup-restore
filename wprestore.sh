@@ -103,13 +103,13 @@ create_db_backup() {
     echo "Creating database backup before restore..." | tee -a "$LOG_FILE"
     
     # First try without tablespace info
-    if mysqldump -h localhost -u "$db_user" -p"$db_pass" --no-tablespaces "$db_name" > "$backup_file" 2>/dev/null; then
+    if mysqldump -h "$DB_HOST" -u "$db_user" -p"$db_pass" --no-tablespaces "$db_name" > "$backup_file" 2> >(tee -a "$LOG_FILE" >&2); then
         echo "Database backup created successfully at: $backup_file" | tee -a "$LOG_FILE"
         return 0
     else
         # If that fails, try with reduced privileges
         echo "Attempting backup with reduced privileges..." | tee -a "$LOG_FILE"
-        if mysqldump -h localhost -u "$db_user" -p"$db_pass" --no-tablespaces --skip-triggers --skip-events "$db_name" > "$backup_file" 2>/dev/null; then
+        if mysqldump -h "$DB_HOST" -u "$db_user" -p"$db_pass" --no-tablespaces --skip-triggers --skip-events "$db_name" > "$backup_file" 2> >(tee -a "$LOG_FILE" >&2); then
             echo "Database backup created with reduced functionality at: $backup_file" | tee -a "$LOG_FILE"
             return 0
         else
@@ -551,8 +551,8 @@ if [ "$DRYRUN" = false ] && [ "$RESTORE_DATABASE" = true ]; then
         echo "⚠️  IMPORTANT: Make note of this change for future reference"
         echo "────────────────────────────────────────────────────────────────"
         
-        echo "Pausing for 30 seconds to note the required changes..."
-        sleep 30
+        echo "Pausing for 15 seconds to note the required changes..."
+        sleep 15
         
         echo "Continuing with restore process..." | tee -a "$LOG_FILE"
     fi
@@ -872,8 +872,8 @@ if [ "$DRYRUN" = false ]; then
             echo "⚠️  The website will not work until you update the table prefix!"
             echo ""
             echo "Required Change:"
-            printf "  Current prefix:  %-30s\n" "$UPDATED_PREFIX"
-            printf "  Required prefix: %-30s\n" "$BACKUP_PREFIX"
+            printf "  Current prefix:  %-15s\n" "$UPDATED_PREFIX"
+            printf "  Required prefix: %-15s\n" "$BACKUP_PREFIX"
             echo ""
             echo "File to edit:"
             printf "  %s\n" "$WP_INSTALL_DIR/wp-config.php"
@@ -900,10 +900,10 @@ if [ "$DRYRUN" = false ]; then
     echo "Please verify the site functionality at: https://$DOMAIN" | tee -a "$LOG_FILE"
     echo ""
     echo "Do you want to clean up temporary files and move the backup archive to the restore folder? (yes/no, default: yes)"
-    echo "Press 'n' to cancel. Proceeding automatically in 60 seconds..."
+    echo "Press 'n' to cancel. Proceeding automatically in 15 seconds..."
     
     # Set up input with timeout and proper error handling
-    read -t 60 -p "Confirm cleanup? [Y/n] " USER_INPUT || true
+    read -t 15 -p "Confirm cleanup? [Y/n] " USER_INPUT || true
     
     # If no input or timeout, default to yes
     if [ -z "$USER_INPUT" ]; then
