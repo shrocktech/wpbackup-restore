@@ -912,10 +912,15 @@ if [ "$DRYRUN" = false ]; then
     
     read -t 60 -p "Delete restore directory? [y/N]: " DELETE_RESTORE_DIR || true
     
+    # For the cleanup section (Step 12) in wprestore.sh:
+    # For the cleanup section (Step 12) in wprestore.sh:
     if [[ "$DELETE_RESTORE_DIR" =~ ^[Yy] ]]; then
-        echo "You chose to delete the restore directory after verification." | tee -a "$LOG_FILE"
-        echo "Please verify that your site is working correctly at https://$DOMAIN"
-        echo "Then manually delete the restore directory at: $RESTORE_DIR"
+        echo "Deleting restore directory..." | tee -a "$LOG_FILE"
+        if rm -rf "$RESTORE_DIR"; then
+            echo "✓ Restore directory deleted successfully" | tee -a "$LOG_FILE"
+        else
+            echo "Error: Failed to delete restore directory. You may need to remove it manually: $RESTORE_DIR" | tee -a "$LOG_FILE"
+        fi
     else
         if [ -z "$DELETE_RESTORE_DIR" ]; then
             echo "No input received within 60 seconds, defaulting to NO." | tee -a "$LOG_FILE"
@@ -923,6 +928,7 @@ if [ "$DRYRUN" = false ]; then
         echo "Restore directory will be preserved at: $RESTORE_DIR" | tee -a "$LOG_FILE"
         echo "You can safely delete it manually after verifying the site works correctly."
     fi
-else
-    echo "[Dry Run] Would clean up temporary files, remove object-cache.php if present, and move the backup archive." | tee -a "$LOG_FILE"
-fi
+    else
+        echo "[Dry Run] Would verify site functionality at: https://$DOMAIN" | tee -a "$LOG_FILE"
+        echo "[Dry Run] Would clean up temporary files, remove object-cache.php if present, and move the backup archive." | tee -a "$LOG_FILE"
+    fi
