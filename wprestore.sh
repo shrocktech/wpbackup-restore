@@ -856,40 +856,6 @@ if [ "$DRYRUN" = false ] && [ "$RESTORE_DATABASE" = true ]; then
 fi
 
 # ---------------------------
-# Step 11: Final Verification
-# ---------------------------
-if [ "$DRYRUN" = false ]; then
-    echo "Running final verifications..." | tee -a "$LOG_FILE"
-    
-    # Table prefix verification section
-    if [ "$EXISTING_PREFIX" != "$BACKUP_PREFIX" ]; then
-        UPDATED_PREFIX=$(grep -oP "\\\$table_prefix\s*=\s*['\"]\K[^'\"]+(?=['\"]\s*;)" "$WP_INSTALL_DIR/wp-config.php")
-        if [ "$UPDATED_PREFIX" != "$BACKUP_PREFIX" ]; then
-            echo "╔════════════════════════════════════════════════════════════════╗"
-            echo "║                  IMPORTANT CONFIGURATION NOTE                  ║"
-            echo "╚════════════════════════════════════════════════════════════════╝"
-            echo ""
-            echo "⚠️  The website will not work until you update the table prefix!"
-            echo ""
-            echo "Required Change:"
-            printf "  Current prefix:  %-15s\n" "$UPDATED_PREFIX"
-            printf "  Required prefix: %-15s\n" "$BACKUP_PREFIX"
-            echo ""
-            echo "File to edit:"
-            printf "  %s\n" "$WP_INSTALL_DIR/wp-config.php"
-            echo "  (around line 70)"
-            echo ""
-            echo "════════════════════════════════════════════════════════════════"
-        else
-            echo "✓ Table prefix configuration verified" | tee -a "$LOG_FILE"
-        fi
-    fi
-    
-    echo "Restore process completed!" | tee -a "$LOG_FILE"
-    echo "Please verify the site functionality at: https://$DOMAIN" | tee -a "$LOG_FILE"
-fi
-
-# ---------------------------
 # Step 12: Cleanup
 # ---------------------------
 if [ "$DRYRUN" = false ]; then
@@ -899,52 +865,64 @@ if [ "$DRYRUN" = false ]; then
     echo ""
     echo "Please verify the site functionality at: https://$DOMAIN" | tee -a "$LOG_FILE"
     echo ""
-    echo "Do you want to clean up temporary files and move the backup archive to the restore folder? (yes/no, default: yes)"
-    echo "Press 'n' to cancel. Proceeding automatically in 15 seconds..."
     
-    # Set up input with timeout and proper error handling
-    read -t 15 -p "Confirm cleanup? [Y/n] " USER_INPUT || true
-    
-    # If no input or timeout, default to yes
-    if [ -z "$USER_INPUT" ]; then
-        echo "No input received, defaulting to yes"
-        USER_INPUT="yes"
+    # Check for and remove object-cache.php if it exists
+    OBJECT_CACHE_FILE="$WP_INSTALL_DIR/wp-content/object-cache.php"
+    if [ -f "$OBJECT_CACHE_FILE" ]; then
+        echo "Found object-cache.php file, removing it to prevent potential issues..." | tee -a "$LOG_FILE"
+        if rm "$OBJECT_CACHE_FILE"; then
+            echo "✓ object-cache.php removed successfully" | tee -a "$LOG_FILE"
+        else
+            echo "Warning: Failed to remove object-cache.php file" | tee -a "$LOG_FILE"
+        fi
+    else
+        echo "No object-cache.php file found, skipping removal" | tee -a "$LOG_FILE"
     fi
     
-    # Convert to lowercase
-    USER_INPUT=$(echo "$USER_INPUT" | tr '[:upper:]' '[:lower:]')
+    echo "Cleaning up temporary files and moving backup archive..." | tee -a "$LOG_FILE"
     
-    if [[ "$USER_INPUT" == "y" || "$USER_INPUT" == "yes" || -z "$USER_INPUT" ]]; then
-        # Move archive to restore directory
-        if [ -f "$ARCHIVE_FILE" ]; then
-            if mv "$ARCHIVE_FILE" "$RESTORE_DIR/"; then
-                echo "✓ Backup archive moved to restore directory" | tee -a "$LOG_FILE"
-            else
-                echo "Warning: Failed to move backup archive" | tee -a "$LOG_FILE"
-            fi
-        fi
-        
-        # Cleanup temporary files
-        if cleanup_tmp_files; then
-            echo "✓ Temporary files cleaned up successfully" | tee -a "$LOG_FILE"
+    # Move archive to restore directory
+    if [ -f "$ARCHIVE_FILE" ]; then
+        if mv "$ARCHIVE_FILE" "$RESTORE_DIR/"; then
+            echo "✓ Backup archive moved to restore directory" | tee -a "$LOG_FILE"
         else
-            echo "Warning: Failed to clean up some temporary files" | tee -a "$LOG_FILE"
-            echo "You may need to manually remove: $TEMP_DIR" | tee -a "$LOG_FILE"
+            echo "Warning: Failed to move backup archive" | tee -a "$LOG_FILE"
         fi
-        
-        echo ""
-        echo "All restore files are located in: $RESTORE_DIR"
-        echo "This includes:"
-        echo "  • Backup archive (.tar.gz)"
-        echo "  • Old wp-content backup"
-        echo "  • Restore log file"
-        echo ""
-        echo "Directory is protected from public access via .htaccess"
-        echo "You can safely delete the restore directory after verifying the site works correctly."
-        echo "Location: $RESTORE_DIR"
+    fi
+    
+    # Cleanup temporary files
+    if cleanup_tmp_files; then
+        echo "✓ Temporary files cleaned up successfully" | tee -a "$LOG_FILE"
     else
-        echo "Cleanup skipped. Temporary files are still at $TEMP_DIR" | tee -a "$LOG_FILE"
+        echo "Warning: Failed to clean up some temporary files" | tee -a "$LOG_FILE"
+        echo "You may need to manually remove: $TEMP_DIR" | tee -a "$LOG_FILE"
+    fi
+    
+    echo ""
+    echo "All restore files are located in: $RESTORE_DIR"
+    echo "This includes:"
+    echo "  • Backup archive (.tar.gz)"
+    echo "  • Old wp-content backup"
+    echo "  • Restore log file"
+    echo ""
+    echo "Directory is protected from public access via .htaccess"
+    echo ""
+    echo "Would you like to delete the restore directory after verifying the site?"
+    echo "(You have 60 seconds to respond, default is NO)"
+    
+    read -t 60 -p "Delete restore directory? [y/N]: " DELETE_RESTORE_DIR || true
+    
+    if [[ "$DELETE_RESTORE_DIR" =~ ^[Yy] ]]; then
+        echo "You chose to delete the restore directory after verification." | tee -a "$LOG_FILE"
+        echo "Please verify that your site is working correctly at https://$DOMAIN"
+        echo "Then manually delete the restore directory at: $RESTORE_DIR"
+    else
+        if [ -z "$DELETE_RESTORE_DIR" ]; then
+            echo "No input received within 60 seconds, defaulting to NO." | tee -a "$LOG_FILE"
+        fi
+        echo "Restore directory will be preserved at: $RESTORE_DIR" | tee -a "$LOG_FILE"
+        echo "You can safely delete it manually after verifying the site works correctly."
     fi
 else
-    echo "[Dry Run] Would clean up temporary files and move the backup archive." | tee -a "$LOG_FILE"
+    echo "[Dry Run] Would clean up temporary files, remove object-cache.php if present, and move the backup archive." | tee -a "$LOG_FILE"
 fi
