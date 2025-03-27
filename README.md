@@ -82,7 +82,7 @@ The `wpcleanup` utility removes files from WordPress installations that are no l
 - Cleans up backup archives and restore directories
 - Helps reclaim disk space after site decommissioning
 
-Usage: `wpcleanup domainname.com`
+Usage: `wpcleanup` or `wpcleanup domainname.com`
 
 Cleanup operations are logged to `/var/log/wpsitecleanup.log`.
 

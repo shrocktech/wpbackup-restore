@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# update.sh - Updates the installed wpbackup and wprestore scripts from the GitHub tarball
+# update.sh - Updates the installed wpbackup, wprestore, and wpcleanup scripts from the GitHub tarball
 
 set -e
 
@@ -31,13 +31,20 @@ if ! curl -L https://github.com/shrocktech/wpbackup-restore/archive/refs/heads/m
 fi
 
 # Update scripts
-for script in wpbackup wprestore; do
+for script in wpbackup wprestore wpcleanup; do
     if [ ! -f "$TEMP_DIR/${script}.sh" ]; then
         echo "Error: ${script}.sh not found in the downloaded tarball."
         rm -rf "$TEMP_DIR"
         exit 1
     fi
-    cp "$TEMP_DIR/${script}.sh" "$INSTALL_DIR/$script"
+    
+    # Use the correct destination name for each script
+    if [ "$script" = "wpcleanup" ]; then
+        cp "$TEMP_DIR/cleanup.sh" "$INSTALL_DIR/$script"
+    else
+        cp "$TEMP_DIR/${script}.sh" "$INSTALL_DIR/$script"
+    fi
+    
     chmod +x "$INSTALL_DIR/$script"
     echo "Updated $script in $INSTALL_DIR/$script."
 done
@@ -45,4 +52,4 @@ done
 # Clean up temporary directory
 rm -rf "$TEMP_DIR"
 
-echo "Scripts updated successfully. You can now use wpbackup and wprestore with the latest changes."
+echo "Scripts updated successfully. You can now use wpbackup, wprestore, and wpcleanup with the latest changes."
