@@ -2,7 +2,10 @@
 
 # WordPress Backup Script with S3 Integration
 # Backs up WP sites with database dumps and wp-content, uploads to S3.
-# Usage: wpbackup or wpbackup -dryrun
+# Usage: wpbackup                 - Backs up all sites
+#        wpbackup -dryrun         - Dry run for all sites
+#        wpbackup example.com     - Backs up only the specified site
+#        wpbackup -dryrun example.com - Dry run for the specified site
 # Configuration: Override BASE_DIR, RCLONE_CONF, or GLOBAL_LOG_FILE env vars if needed.
 
 set -e
@@ -15,13 +18,20 @@ for cmd in rclone mysqldump tar; do
     fi
 done
 
-# Check for dry run flag
-if [[ "$1" == "-dryrun" ]]; then
-    DRYRUN=true
-    echo "Dry run mode enabled. No changes will be made."
-else
-    DRYRUN=false
-fi
+# Process arguments
+DRYRUN=false
+SPECIFIC_SITE=""
+
+# Check arguments
+for arg in "$@"; do
+    if [[ "$arg" == "-dryrun" ]]; then
+        DRYRUN=true
+        echo "Dry run mode enabled. No changes will be made."
+    elif [[ "$arg" != -* ]]; then
+        SPECIFIC_SITE="$arg"
+        echo "Processing only site: $SPECIFIC_SITE"
+    fi
+done
 
 # Set dynamic variables
 RCLONE_CONF="${RCLONE_CONF:-/root/.config/rclone/rclone.conf}"
@@ -118,6 +128,79 @@ apply_retention_policy() {
     echo "Backup retention complete. Retained: $retained_count, Deleted: $deleted_count"
 }
 
+# Function to backup a single site
+backup_site() {
+    local dir="$1"
+    local WP_CONFIG="${dir}wp-config.php"
+    local DOMAIN_NAME=$(basename "$dir")
+    local SITE_LOG_FILE="/tmp/${DOMAIN_NAME}_backup.log"
+    
+    # Create a fresh log file with header for this site
+    echo "WordPress Backup Log for $DOMAIN_NAME - $(date)" > "$SITE_LOG_FILE"
+    echo "----------------------------------------------" >> "$SITE_LOG_FILE"
+    
+    echo "Processing site: $DOMAIN_NAME" | tee -a "$SITE_LOG_FILE"
+    
+    # Extract database credentials
+    DB_NAME=$(grep -oP "define\s*\(\s*'DB_NAME'\s*,\s*'\K[^']+" "$WP_CONFIG")
+    DB_USER=$(grep -oP "define\s*\(\s*'DB_USER'\s*,\s*'\K[^']+" "$WP_CONFIG")
+    DB_PASSWORD=$(grep -oP "define\s*\(\s*'DB_PASSWORD'\s*,\s*'\K[^']+" "$WP_CONFIG")
+    
+    echo "Found database: $DB_NAME" >> "$SITE_LOG_FILE"
+    
+    WP_CONTENT_DIR="${dir}wp-content"
+    # Check wp-content exists
+    if [ ! -d "$WP_CONTENT_DIR" ]; then
+        echo "ERROR: wp-content directory not found at $WP_CONTENT_DIR" | tee -a "$SITE_LOG_FILE"
+        return 1
+    fi
+    
+    # Use domain-prefixed database backup filename format
+    DOMAIN_PREFIX=${DOMAIN_NAME%%.*}
+    DB_DUMP="/tmp/${DOMAIN_PREFIX}_db_$(date +'%Y-%m-%d').sql"
+    ARCHIVE_NAME="${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
+    
+    echo "Creating database dump..." >> "$SITE_LOG_FILE"
+    # Redirect MySQL warnings to a separate file to keep our log clean
+    mysqldump -u "$DB_USER" -p"$DB_PASSWORD" --no-tablespaces "$DB_NAME" > "$DB_DUMP" 2>/tmp/mysql_warnings.tmp
+    
+    if [ $? -eq 0 ]; then
+        echo "✓ Database dump successful ($(du -h "$DB_DUMP" | cut -f1) size)" | tee -a "$SITE_LOG_FILE"
+        
+        echo "Creating backup archive..." >> "$SITE_LOG_FILE"
+        tar -czf "$ARCHIVE_NAME" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"
+        
+        echo "✓ Archive created: $ARCHIVE_NAME ($(du -h "$ARCHIVE_NAME" | cut -f1) size)" | tee -a "$SITE_LOG_FILE"
+        echo "Uploading to S3..." >> "$SITE_LOG_FILE"
+        
+        # Redirect rclone output to a file instead of the site log
+        rclone copy $RCLONE_FLAGS "$ARCHIVE_NAME" "$FULL_REMOTE_PATH" --progress >/tmp/rclone_output.tmp 2>&1
+        
+        # Verify the upload (skip verification in dry run)
+        if [ "$DRYRUN" = false ]; then
+            if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_NAME")" > /dev/null 2>&1; then
+                echo "✓ Successfully uploaded to S3" | tee -a "$SITE_LOG_FILE"
+                
+                # Keep a local copy of today's backup
+                echo "✓ Keeping local copy in $LOCAL_BACKUP_DIR" | tee -a "$SITE_LOG_FILE"
+                cp "$ARCHIVE_NAME" "$LOCAL_BACKUP_DIR/"
+            else
+                echo "✗ Failed to verify upload to S3" | tee -a "$SITE_LOG_FILE"
+            fi
+        fi
+        
+        echo "Backup process for $DOMAIN_NAME completed at $(date)" >> "$SITE_LOG_FILE"
+        
+        # Clean up the original archive and temp files
+        rm -f "$ARCHIVE_NAME" "$DB_DUMP" "/tmp/mysql_warnings.tmp" "/tmp/rclone_output.tmp"
+
+    else
+        echo "✗ Database dump failed for $DOMAIN_NAME" | tee -a "$SITE_LOG_FILE"
+    fi
+    
+    echo "Completed processing $DOMAIN_NAME"
+}
+
 # Perform backups
 echo "Backup process started at $(date)"
 
@@ -157,83 +240,38 @@ if [ "$DRYRUN" = false ]; then
     echo "Local cleanup complete."
 fi
 
-
-# Loop through WordPress installations
-for dir in "$BASE_DIR"/*/ ; do
-    if [ -f "${dir}wp-config.php" ]; then
-        WP_CONFIG="${dir}wp-config.php"
-        DOMAIN_NAME=$(basename "$dir")
-        SITE_LOG_FILE="/tmp/${DOMAIN_NAME}_backup.log"
-        
-        # Create a fresh log file with header for this site
-        echo "WordPress Backup Log for $DOMAIN_NAME - $(date)" > "$SITE_LOG_FILE"
-        echo "----------------------------------------------" >> "$SITE_LOG_FILE"
-        
-        echo "Processing site: $DOMAIN_NAME" | tee -a "$SITE_LOG_FILE"
-        
-        # Extract database credentials
-        DB_NAME=$(grep -oP "define\s*\(\s*'DB_NAME'\s*,\s*'\K[^']+" "$WP_CONFIG")
-        DB_USER=$(grep -oP "define\s*\(\s*'DB_USER'\s*,\s*'\K[^']+" "$WP_CONFIG")
-        DB_PASSWORD=$(grep -oP "define\s*\(\s*'DB_PASSWORD'\s*,\s*'\K[^']+" "$WP_CONFIG")
-        
-        echo "Found database: $DB_NAME" >> "$SITE_LOG_FILE"
-        
-        WP_CONTENT_DIR="${dir}wp-content"
-        # Check wp-content exists
-        if [ ! -d "$WP_CONTENT_DIR" ]; then
-            echo "ERROR: wp-content directory not found at $WP_CONTENT_DIR" | tee -a "$SITE_LOG_FILE"
-            continue
+# Check if we're only backing up a specific site
+if [ -n "$SPECIFIC_SITE" ]; then
+    # Find the directory for the specified site
+    SITE_DIR=""
+    for dir in "$BASE_DIR"/*/ ; do
+        if [ "$(basename "$dir")" = "$SPECIFIC_SITE" ] && [ -f "${dir}wp-config.php" ]; then
+            SITE_DIR="$dir"
+            break
         fi
-        
-        # Use domain-prefixed database backup filename format
-        DOMAIN_PREFIX=${DOMAIN_NAME%%.*}
-        DB_DUMP="/tmp/${DOMAIN_PREFIX}_db_$(date +'%Y-%m-%d').sql"
-        ARCHIVE_NAME="${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
-        
-        echo "Creating database dump..." >> "$SITE_LOG_FILE"
-        # Redirect MySQL warnings to a separate file to keep our log clean
-        mysqldump -u "$DB_USER" -p"$DB_PASSWORD" --no-tablespaces "$DB_NAME" > "$DB_DUMP" 2>/tmp/mysql_warnings.tmp
-        
-        if [ $? -eq 0 ]; then
-            echo "✓ Database dump successful ($(du -h "$DB_DUMP" | cut -f1) size)" | tee -a "$SITE_LOG_FILE"
-            
-            echo "Creating backup archive..." >> "$SITE_LOG_FILE"
-            tar -czf "$ARCHIVE_NAME" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"
-            
-            echo "✓ Archive created: $ARCHIVE_NAME ($(du -h "$ARCHIVE_NAME" | cut -f1) size)" | tee -a "$SITE_LOG_FILE"
-            echo "Uploading to S3..." >> "$SITE_LOG_FILE"
-            
-            # Redirect rclone output to a file instead of the site log
-            rclone copy $RCLONE_FLAGS "$ARCHIVE_NAME" "$FULL_REMOTE_PATH" --progress >/tmp/rclone_output.tmp 2>&1
-            
-            # Verify the upload (skip verification in dry run)
-            if [ "$DRYRUN" = false ]; then
-                if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_NAME")" > /dev/null 2>&1; then
-                    echo "✓ Successfully uploaded to S3" | tee -a "$SITE_LOG_FILE"
-                    
-                    # Keep a local copy of today's backup
-                    echo "✓ Keeping local copy in $LOCAL_BACKUP_DIR" | tee -a "$SITE_LOG_FILE"
-                    cp "$ARCHIVE_NAME" "$LOCAL_BACKUP_DIR/"
-                else
-                    echo "✗ Failed to verify upload to S3" | tee -a "$SITE_LOG_FILE"
-                fi
-            fi
-            
-            echo "Backup process for $DOMAIN_NAME completed at $(date)" >> "$SITE_LOG_FILE"
-            
-            # Clean up the original archive and temp files
-            rm -f "$ARCHIVE_NAME" "$DB_DUMP" "/tmp/mysql_warnings.tmp" "/tmp/rclone_output.tmp"
-
-        else
-            echo "✗ Database dump failed for $DOMAIN_NAME" | tee -a "$SITE_LOG_FILE"
-        fi
-        
-        echo "Completed processing $DOMAIN_NAME"
+    done
+    
+    if [ -n "$SITE_DIR" ]; then
+        backup_site "$SITE_DIR"
+    else
+        echo "Error: WordPress site $SPECIFIC_SITE not found in $BASE_DIR or wp-config.php missing."
+        exit 1
     fi
-done
+else
+    # Loop through all WordPress installations
+    for dir in "$BASE_DIR"/*/ ; do
+        if [ -f "${dir}wp-config.php" ]; then
+            backup_site "$dir"
+        fi
+    done
+fi
 
 # Clean up temp directory
 rm -rf "$TEMP_DIR"
 
-apply_retention_policy
+# Only run retention policy if we're doing a full backup
+if [ -z "$SPECIFIC_SITE" ]; then
+    apply_retention_policy
+fi
+
 echo "Backup process completed successfully at $(date)"
