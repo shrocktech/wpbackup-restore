@@ -127,8 +127,36 @@ mkdir -p "$LOCAL_BACKUP_DIR"
 # Remove previous day's backups from local backup directory
 if [ "$DRYRUN" = false ]; then
     echo "Cleaning up old local backups..."
-    find "$LOCAL_BACKUP_DIR" -name "*.tar.gz" -type f -mtime +1 -delete
+    directory="$LOCAL_BACKUP_DIR"
+    declare -A max_dates
+
+    for file in "$directory"/*; do
+        if [ -f "$file" ]; then
+            domain_name=${file%_*}                   # Everything before last underscore
+            date_part=${file#*_}                     # Everything after first underscore
+            date=${date_part%.tar.gz}                # Strip .tar.gz to get date (YYYY-MM-DD)
+
+            if [ -z "${max_dates[$domain_name]}" ] || [[ "$date" > "${max_dates[$domain_name]}" ]]; then
+                max_dates["$domain_name"]="$date"
+            fi
+        fi
+    done
+
+    for file in "$directory"/*; do
+        if [ -f "$file" ]; then
+            domain_name=${file%_*}
+            date_part=${file#*_}
+            date=${date_part%.tar.gz}
+
+            if [ "$date" != "${max_dates[$domain_name]}" ]; then
+                echo "Deleting old backup: $file"
+                rm -f "$file"
+            fi
+        fi
+    done
+    echo "Local cleanup complete."
 fi
+
 
 # Loop through WordPress installations
 for dir in "$BASE_DIR"/*/ ; do
@@ -193,8 +221,9 @@ for dir in "$BASE_DIR"/*/ ; do
             
             echo "Backup process for $DOMAIN_NAME completed at $(date)" >> "$SITE_LOG_FILE"
             
-            # Clean up the original archive after copying it to local backup dir
-            rm -f "$ARCHIVE_NAME" "$DB_DUMP" /tmp/mysql_warnings.tmp /tmp/rclone_output.tmp
+            # Clean up the original archive and temp files
+            rm -f "$ARCHIVE_NAME" "$DB_DUMP" "/tmp/mysql_warnings.tmp" "/tmp/rclone_output.tmp"
+
         else
             echo "✗ Database dump failed for $DOMAIN_NAME" | tee -a "$SITE_LOG_FILE"
         fi
