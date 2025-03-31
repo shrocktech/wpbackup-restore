@@ -48,7 +48,7 @@ fi
 # Function to list backup folders
 get_backup_folders() {
     folders=$(rclone lsf "${REMOTE_NAME}" --dirs-only)
-    echo "$folders" | grep -E '[0-9]{8}_Daily_Backup_Job$' || true
+    echo "$folders" | sed 's:/*$::' | grep -E '[0-9]{8}_Daily_Backup_Job$' || true
 }
 
 # Function to check if a date is a Sunday
