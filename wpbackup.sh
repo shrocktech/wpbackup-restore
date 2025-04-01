@@ -208,33 +208,17 @@ echo "Backup process started at $(date)"
 mkdir -p "$LOCAL_BACKUP_DIR"
 
 # Remove previous day's backups from local backup directory
+# Clean up old backups before starting new ones
 if [ "$DRYRUN" = false ]; then
     echo "Cleaning up old local backups..."
-    directory="$LOCAL_BACKUP_DIR"
-    declare -A max_dates
-
-    for file in "$directory"/*; do
-        if [ -f "$file" ]; then
-            domain_name=${file%_*}                   # Everything before last underscore
-            date_part=${file#*_}                     # Everything after first underscore
-            date=${date_part%.tar.gz}                # Strip .tar.gz to get date (YYYY-MM-DD)
-
-            if [ -z "${max_dates[$domain_name]}" ] || [[ "$date" > "${max_dates[$domain_name]}" ]]; then
-                max_dates["$domain_name"]="$date"
-            fi
-        fi
-    done
-
-    for file in "$directory"/*; do
-        if [ -f "$file" ]; then
-            domain_name=${file%_*}
-            date_part=${file#*_}
-            date=${date_part%.tar.gz}
-
-            if [ "$date" != "${max_dates[$domain_name]}" ]; then
-                echo "Deleting old backup: $file"
-                rm -f "$file"
-            fi
+    # Keep only today's backups, delete everything else
+    todays_date=$(date +'%Y-%m-%d')
+    find "$LOCAL_BACKUP_DIR" -type f -name "*.tar.gz" | while read file; do
+        if [[ "$(basename "$file")" != *"_${todays_date}.tar.gz" ]]; then
+            echo "Deleting old backup: $(basename "$file")"
+            rm -f "$file"
+        else
+            echo "Keeping today's backup: $(basename "$file")"
         fi
     done
     echo "Local cleanup complete."
