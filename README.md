@@ -23,7 +23,12 @@ mkdir -p /opt/wpbackup-restore && curl -L https://github.com/shrocktech/wpbackup
 - This downloads the latest files, sets permissions, installs Rclone (if needed), copies `rclone.conf.example` to `/root/.config/rclone/rclone.conf`, installs `wpbackup`, `wprestore`, and `update-wpscripts` to `/usr/local/bin`, and sets a cron job for daily backups at 2:00 AM.
 
 ## Configuration
-Edit the Rclone configuration file with your S3-compatible storage credentials:
+First make sure the config file exists
+```bash
+mkdir -p /root/.config/rclone
+```
+
+Then edit the Rclone configuration file with your S3-compatible storage credentials:
 ```bash
 nano /root/.config/rclone/rclone.conf
 ```
