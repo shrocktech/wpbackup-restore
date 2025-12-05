@@ -1,3 +1,4 @@
+cat > /usr/local/bin/wpbackup << 'EOF'
 #!/bin/bash
 
 # WordPress Backup Script with S3 Integration
@@ -158,7 +159,8 @@ backup_site() {
     # Use domain-prefixed database backup filename format
     DOMAIN_PREFIX=${DOMAIN_NAME%%.*}
     DB_DUMP="/tmp/${DOMAIN_PREFIX}_db_$(date +'%Y-%m-%d').sql"
-    ARCHIVE_NAME="${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
+    # Create archive in /tmp to avoid leaving files in working directory
+    ARCHIVE_PATH="/tmp/${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
     
     echo "Creating database dump..." >> "$SITE_LOG_FILE"
     # Redirect MySQL warnings to a separate file to keep our log clean
@@ -168,22 +170,22 @@ backup_site() {
         echo "✓ Database dump successful ($(du -h "$DB_DUMP" | cut -f1) size)" | tee -a "$SITE_LOG_FILE"
         
         echo "Creating backup archive..." >> "$SITE_LOG_FILE"
-        tar -czf "$ARCHIVE_NAME" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"
+        tar -czf "$ARCHIVE_PATH" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"
         
-        echo "✓ Archive created: $ARCHIVE_NAME ($(du -h "$ARCHIVE_NAME" | cut -f1) size)" | tee -a "$SITE_LOG_FILE"
+        echo "✓ Archive created: $(basename "$ARCHIVE_PATH") ($(du -h "$ARCHIVE_PATH" | cut -f1) size)" | tee -a "$SITE_LOG_FILE"
         echo "Uploading to S3..." >> "$SITE_LOG_FILE"
         
         # Redirect rclone output to a file instead of the site log
-        rclone copy $RCLONE_FLAGS "$ARCHIVE_NAME" "$FULL_REMOTE_PATH" --progress >/tmp/rclone_output.tmp 2>&1
+        rclone copy $RCLONE_FLAGS "$ARCHIVE_PATH" "$FULL_REMOTE_PATH" --progress >/tmp/rclone_output.tmp 2>&1
         
         # Verify the upload (skip verification in dry run)
         if [ "$DRYRUN" = false ]; then
-            if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_NAME")" > /dev/null 2>&1; then
+            if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_PATH")" > /dev/null 2>&1; then
                 echo "✓ Successfully uploaded to S3" | tee -a "$SITE_LOG_FILE"
                 
                 # Keep a local copy of today's backup
                 echo "✓ Keeping local copy in $LOCAL_BACKUP_DIR" | tee -a "$SITE_LOG_FILE"
-                cp "$ARCHIVE_NAME" "$LOCAL_BACKUP_DIR/"
+                cp "$ARCHIVE_PATH" "$LOCAL_BACKUP_DIR/"
             else
                 echo "✗ Failed to verify upload to S3" | tee -a "$SITE_LOG_FILE"
             fi
@@ -192,7 +194,7 @@ backup_site() {
         echo "Backup process for $DOMAIN_NAME completed at $(date)" >> "$SITE_LOG_FILE"
         
         # Clean up the original archive and temp files
-        rm -f "$ARCHIVE_NAME" "$DB_DUMP" "/tmp/mysql_warnings.tmp" "/tmp/rclone_output.tmp"
+        rm -f "$ARCHIVE_PATH" "$DB_DUMP" "/tmp/mysql_warnings.tmp" "/tmp/rclone_output.tmp"
 
     else
         echo "✗ Database dump failed for $DOMAIN_NAME" | tee -a "$SITE_LOG_FILE"
@@ -222,6 +224,10 @@ if [ "$DRYRUN" = false ]; then
         fi
     done
     echo "Local cleanup complete."
+    
+    # Clean up any stray backup archives in /root from previous runs
+    echo "Cleaning up stray archives in /root..."
+    find /root -maxdepth 1 -name "*.tar.gz" -type f -mtime +0 -delete 2>/dev/null || true
 fi
 
 # Check if we're only backing up a specific site
@@ -259,3 +265,4 @@ if [ -z "$SPECIFIC_SITE" ]; then
 fi
 
 echo "Backup process completed successfully at $(date)"
+EOF
