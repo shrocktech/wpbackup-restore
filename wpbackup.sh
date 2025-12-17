@@ -1,268 +1,328 @@
 cat > /usr/local/bin/wpbackup << 'EOF'
 #!/bin/bash
 
-# WordPress Backup Script with S3 Integration
-# Backs up WP sites with database dumps and wp-content, uploads to S3.
-# Usage: wpbackup                 - Backs up all sites
-#        wpbackup -dryrun         - Dry run for all sites
-#        wpbackup example.com     - Backs up only the specified site
-#        wpbackup -dryrun example.com - Dry run for the specified site
-# Configuration: Override BASE_DIR, RCLONE_CONF, or GLOBAL_LOG_FILE env vars if needed.
+# WordPress Backup Script with S3 Integration (hardened)
+# - Backs up WP sites: wp-content + wp-config.php + DB dump
+# - Uploads to S3 via rclone
+# - Optional local copy of today's backups
+# - Retention policy on S3 folders
+#
+# Usage:
+#   wpbackup
+#   wpbackup -dryrun
+#   wpbackup example.com
+#   wpbackup -dryrun example.com
+#
+# Config env vars (optional):
+#   BASE_DIR=/var/www
+#   LOCAL_BACKUP_DIR=/var/backups/wordpress_backups
+#   STAGING_ROOT=/var/backups/wpbackup_staging
+#   RCLONE_CONF=/root/.config/rclone/rclone.conf
+#   REMOTE_NAME=S3Backup:
+#
+# NOTE:
+#   This script intentionally avoids /tmp for large files to prevent filling the root disk.
 
-set -e
+set -Eeuo pipefail
 
-# Check for required tools
-for cmd in rclone mysqldump tar; do
-    if ! command -v "$cmd" &> /dev/null; then
-        echo "Error: $cmd is not installed. Please install it and try again."
-        exit 1
-    fi
+# ---------- Required tools ----------
+for cmd in rclone mysqldump tar grep sed date find mktemp du basename; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Error: $cmd is not installed. Please install it and try again."
+    exit 1
+  fi
 done
 
-# Process arguments
+# ---------- Args ----------
 DRYRUN=false
 SPECIFIC_SITE=""
 
-# Check arguments
 for arg in "$@"; do
-    if [[ "$arg" == "-dryrun" ]]; then
-        DRYRUN=true
-        echo "Dry run mode enabled. No changes will be made."
-    elif [[ "$arg" != -* ]]; then
-        SPECIFIC_SITE="$arg"
-        echo "Processing only site: $SPECIFIC_SITE"
-    fi
+  if [[ "$arg" == "-dryrun" ]]; then
+    DRYRUN=true
+    echo "Dry run mode enabled. No changes will be made."
+  elif [[ "$arg" != -* ]]; then
+    SPECIFIC_SITE="$arg"
+    echo "Processing only site: $SPECIFIC_SITE"
+  fi
 done
 
-# Set dynamic variables
+# ---------- Config ----------
 RCLONE_CONF="${RCLONE_CONF:-/root/.config/rclone/rclone.conf}"
 if [ ! -f "$RCLONE_CONF" ]; then
-    echo "Error: rclone configuration file not found at $RCLONE_CONF."
-    exit 1
+  echo "Error: rclone configuration file not found at $RCLONE_CONF."
+  exit 1
 fi
+export RCLONE_CONFIG="$RCLONE_CONF"
 
 REMOTE_NAME="${REMOTE_NAME:-S3Backup:}"
 echo "Using remote alias '$REMOTE_NAME' defined in rclone.conf."
+
 DAILY_FOLDER="$(date +'%Y%m%d')_Daily_Backup_Job"
 FULL_REMOTE_PATH="${REMOTE_NAME}${DAILY_FOLDER}"
 
-TEMP_DIR=$(mktemp -d)
 BASE_DIR="${BASE_DIR:-/var/www}"
 LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-/var/backups/wordpress_backups}"
+STAGING_ROOT="${STAGING_ROOT:-/var/backups/wpbackup_staging}"
+
+mkdir -p "$LOCAL_BACKUP_DIR"
+mkdir -p "$STAGING_ROOT"
 
 if [ "$DRYRUN" = true ]; then
-    RCLONE_FLAGS="--dry-run"
+  RCLONE_FLAGS="--dry-run"
 else
-    RCLONE_FLAGS=""
+  RCLONE_FLAGS=""
 fi
 
-# Function to list backup folders
+RUN_ID="$(date +'%Y%m%d_%H%M%S')_$$"
+RUN_STAGING_DIR="$(mktemp -d -p "$STAGING_ROOT" "wpbackup_${RUN_ID}_XXXX")"
+
+cleanup() {
+  # Always remove our staging directory
+  if [ -n "${RUN_STAGING_DIR:-}" ] && [[ "$RUN_STAGING_DIR" == "$STAGING_ROOT"/wpbackup_* ]]; then
+    rm -rf "$RUN_STAGING_DIR" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+# ---------- Helpers ----------
+log() {
+  echo "[$(date +'%F %T')] $*"
+}
+
+# Function to list backup folders on remote
 get_backup_folders() {
-    folders=$(rclone lsf "${REMOTE_NAME}" --dirs-only)
-    echo "$folders" | sed 's:/*$::' | grep -E '[0-9]{8}_Daily_Backup_Job$' || true
+  # list only directories at remote root
+  local folders
+  folders="$(rclone lsf "${REMOTE_NAME}" --dirs-only 2>/dev/null || true)"
+  echo "$folders" | sed 's:/*$::' | grep -E '^[0-9]{8}_Daily_Backup_Job$' || true
 }
 
-# Function to check if a date is a Sunday
 is_sunday() {
-    local date_str="$1"
-    date -d "${date_str:0:4}-${date_str:4:2}-${date_str:6:2}" +%w | grep -q '^0$'
+  local date_str="$1"
+  date -d "${date_str:0:4}-${date_str:4:2}-${date_str:6:2}" +%w | grep -q '^0$'
 }
 
-# Function to check if a date is the last day of the month
 is_last_day_of_month() {
-    local date_str="$1"
-    local year="${date_str:0:4}"
-    local month="${date_str:4:2}"
-    local day="${date_str:6:2}"
-    local last_day=$(date -d "$year-$month-01 + 1 month - 1 day" +%d)
-    [ "$day" = "$last_day" ]
+  local date_str="$1"
+  local year="${date_str:0:4}"
+  local month="${date_str:4:2}"
+  local day="${date_str:6:2}"
+  local last_day
+  last_day="$(date -d "$year-$month-01 + 1 month - 1 day" +%d)"
+  [ "$day" = "$last_day" ]
 }
 
-# Function to apply retention policy
 apply_retention_policy() {
-    echo "Starting backup retention management..."
+  log "Starting backup retention management..."
 
-    mapfile -t folders < <(get_backup_folders | sort)
-    if [ ${#folders[@]} -eq 0 ]; then
-        echo "No backup folders found for retention management."
-        return
+  mapfile -t folders < <(get_backup_folders | sort)
+  if [ ${#folders[@]} -eq 0 ]; then
+    log "No backup folders found for retention management."
+    return 0
+  fi
+
+  declare -A keep_folders
+  local today
+  today="$(date +%Y%m%d)"
+  local deleted_count=0
+  local retained_count=0
+
+  for ((i=${#folders[@]}-1; i>=0; i--)); do
+    local folder="${folders[i]}"
+    local date_str="${folder:0:8}"
+    local age_days
+    age_days=$(( ( $(date -d "$today" +%s) - $(date -d "$date_str" +%s) ) / 86400 ))
+
+    if [ "$age_days" -lt 7 ]; then
+      keep_folders["$folder"]="daily"
+      continue
     fi
 
-    declare -A keep_folders
-    local today=$(date +%Y%m%d)
-    local deleted_count=0
-    local retained_count=0
+    if [ "$age_days" -lt 28 ] && is_sunday "$date_str"; then
+      keep_folders["$folder"]="weekly"
+      continue
+    fi
 
-    for ((i=${#folders[@]}-1; i>=0; i--)); do
-        folder="${folders[i]}"
-        date_str="${folder:0:8}"
-        age_days=$(( ( $(date -d "$today" +%s) - $(date -d "$date_str" +%s) ) / 86400 ))
+    if [ "$age_days" -lt 90 ] && is_last_day_of_month "$date_str"; then
+      keep_folders["$folder"]="monthly"
+      continue
+    fi
+  done
 
-        if [ $age_days -lt 7 ]; then
-            keep_folders[$folder]="daily"
-            continue
-        fi
+  for folder in "${folders[@]}"; do
+    if [ -z "${keep_folders[$folder]:-}" ]; then
+      log "Deleting $folder (doesn't match retention rules)"
+      rclone purge $RCLONE_FLAGS "${REMOTE_NAME}${folder}/" >/dev/null 2>&1 || log "WARN: Error deleting $folder"
+      ((deleted_count++)) || true
+    else
+      log "Keeping $folder (${keep_folders[$folder]} backup)"
+      ((retained_count++)) || true
+    fi
+  done
 
-        if [ $age_days -lt 28 ] && is_sunday "$date_str"; then
-            keep_folders[$folder]="weekly"
-            continue
-        fi
-
-        if [ $age_days -lt 90 ] && is_last_day_of_month "$date_str"; then
-            keep_folders[$folder]="monthly"
-            continue
-        fi
-    done
-
-    for folder in "${folders[@]}"; do
-        if [ -z "${keep_folders[$folder]:-}" ]; then
-            echo "Deleting $folder (doesn't match retention rules)"
-            # Add trailing slash to ensure targeting the directory
-            rclone purge $RCLONE_FLAGS "${REMOTE_NAME}${folder}/" 2>/dev/null || echo "Error deleting $folder"
-            ((deleted_count++))
-        else
-            echo "Keeping $folder (${keep_folders[$folder]} backup)"
-            ((retained_count++))
-        fi
-    done
-
-    echo "Backup retention complete. Retained: $retained_count, Deleted: $deleted_count"
+  log "Backup retention complete. Retained: $retained_count, Deleted: $deleted_count"
 }
 
-# Function to backup a single site
+# Extract DB credentials from wp-config.php
+extract_wp_db_creds() {
+  local wp_config="$1"
+
+  local db_name db_user db_pass
+  db_name="$(grep -oP "define\s*\(\s*'DB_NAME'\s*,\s*'\K[^']+" "$wp_config" 2>/dev/null || true)"
+  db_user="$(grep -oP "define\s*\(\s*'DB_USER'\s*,\s*'\K[^']+" "$wp_config" 2>/dev/null || true)"
+  db_pass="$(grep -oP "define\s*\(\s*'DB_PASSWORD'\s*,\s*'\K[^']+" "$wp_config" 2>/dev/null || true)"
+
+  if [ -z "$db_name" ] || [ -z "$db_user" ]; then
+    return 1
+  fi
+
+  echo "$db_name|$db_user|$db_pass"
+}
+
+# Backup one site
 backup_site() {
-    local dir="$1"
-    local WP_CONFIG="${dir}wp-config.php"
-    local DOMAIN_NAME=$(basename "$dir")
-    local SITE_LOG_FILE="/tmp/${DOMAIN_NAME}_backup.log"
-    
-    # Create a fresh log file with header for this site
-    echo "WordPress Backup Log for $DOMAIN_NAME - $(date)" > "$SITE_LOG_FILE"
-    echo "----------------------------------------------" >> "$SITE_LOG_FILE"
-    
-    echo "Processing site: $DOMAIN_NAME" | tee -a "$SITE_LOG_FILE"
-    
-    # Extract database credentials
-    DB_NAME=$(grep -oP "define\s*\(\s*'DB_NAME'\s*,\s*'\K[^']+" "$WP_CONFIG")
-    DB_USER=$(grep -oP "define\s*\(\s*'DB_USER'\s*,\s*'\K[^']+" "$WP_CONFIG")
-    DB_PASSWORD=$(grep -oP "define\s*\(\s*'DB_PASSWORD'\s*,\s*'\K[^']+" "$WP_CONFIG")
-    
-    echo "Found database: $DB_NAME" >> "$SITE_LOG_FILE"
-    
-    WP_CONTENT_DIR="${dir}wp-content"
-    # Check wp-content exists
-    if [ ! -d "$WP_CONTENT_DIR" ]; then
-        echo "ERROR: wp-content directory not found at $WP_CONTENT_DIR" | tee -a "$SITE_LOG_FILE"
-        return 1
-    fi
-    
-    # Use domain-prefixed database backup filename format
-    DOMAIN_PREFIX=${DOMAIN_NAME%%.*}
-    DB_DUMP="/tmp/${DOMAIN_PREFIX}_db_$(date +'%Y-%m-%d').sql"
-    # Create archive in /tmp to avoid leaving files in working directory
-    ARCHIVE_PATH="/tmp/${DOMAIN_NAME}_$(date +'%Y-%m-%d').tar.gz"
-    
-    echo "Creating database dump..." >> "$SITE_LOG_FILE"
-    # Redirect MySQL warnings to a separate file to keep our log clean
-    mysqldump -u "$DB_USER" -p"$DB_PASSWORD" --no-tablespaces "$DB_NAME" > "$DB_DUMP" 2>/tmp/mysql_warnings.tmp
-    
-    if [ $? -eq 0 ]; then
-        echo "✓ Database dump successful ($(du -h "$DB_DUMP" | cut -f1) size)" | tee -a "$SITE_LOG_FILE"
-        
-        echo "Creating backup archive..." >> "$SITE_LOG_FILE"
-        tar -czf "$ARCHIVE_PATH" -C "$dir" "wp-content" "wp-config.php" -C /tmp "$(basename "$DB_DUMP")" "$(basename "$SITE_LOG_FILE")"
-        
-        echo "✓ Archive created: $(basename "$ARCHIVE_PATH") ($(du -h "$ARCHIVE_PATH" | cut -f1) size)" | tee -a "$SITE_LOG_FILE"
-        echo "Uploading to S3..." >> "$SITE_LOG_FILE"
-        
-        # Redirect rclone output to a file instead of the site log
-        rclone copy $RCLONE_FLAGS "$ARCHIVE_PATH" "$FULL_REMOTE_PATH" --progress >/tmp/rclone_output.tmp 2>&1
-        
-        # Verify the upload (skip verification in dry run)
-        if [ "$DRYRUN" = false ]; then
-            if rclone ls "${FULL_REMOTE_PATH}/$(basename "$ARCHIVE_PATH")" > /dev/null 2>&1; then
-                echo "✓ Successfully uploaded to S3" | tee -a "$SITE_LOG_FILE"
-                
-                # Keep a local copy of today's backup
-                echo "✓ Keeping local copy in $LOCAL_BACKUP_DIR" | tee -a "$SITE_LOG_FILE"
-                cp "$ARCHIVE_PATH" "$LOCAL_BACKUP_DIR/"
-            else
-                echo "✗ Failed to verify upload to S3" | tee -a "$SITE_LOG_FILE"
-            fi
-        fi
-        
-        echo "Backup process for $DOMAIN_NAME completed at $(date)" >> "$SITE_LOG_FILE"
-        
-        # Clean up the original archive and temp files
-        rm -f "$ARCHIVE_PATH" "$DB_DUMP" "/tmp/mysql_warnings.tmp" "/tmp/rclone_output.tmp"
+  local dir="$1"
+  local wp_config="${dir%/}/wp-config.php"
+  local domain_name
+  domain_name="$(basename "$dir")"
 
+  local site_stage_dir
+  site_stage_dir="$(mktemp -d -p "$RUN_STAGING_DIR" "site_${domain_name}_XXXX")"
+
+  local site_log_file="${site_stage_dir}/${domain_name}_backup.log"
+  local mysql_warn_file="${site_stage_dir}/mysql_warnings.tmp"
+  local rclone_out_file="${site_stage_dir}/rclone_output.tmp"
+
+  # fresh log
+  {
+    echo "WordPress Backup Log for $domain_name - $(date)"
+    echo "----------------------------------------------"
+  } > "$site_log_file"
+
+  log "Processing site: $domain_name"
+
+  if [ ! -f "$wp_config" ]; then
+    echo "ERROR: wp-config.php not found at $wp_config" | tee -a "$site_log_file"
+    return 0
+  fi
+
+  local creds
+  if ! creds="$(extract_wp_db_creds "$wp_config")"; then
+    echo "ERROR: Could not parse DB creds from $wp_config" | tee -a "$site_log_file"
+    return 0
+  fi
+
+  local db_name db_user db_pass
+  db_name="${creds%%|*}"
+  db_user="$(echo "$creds" | cut -d'|' -f2)"
+  db_pass="$(echo "$creds" | cut -d'|' -f3)"
+
+  echo "Found database: $db_name" >> "$site_log_file"
+
+  local wp_content_dir="${dir%/}/wp-content"
+  if [ ! -d "$wp_content_dir" ]; then
+    echo "ERROR: wp-content directory not found at $wp_content_dir" | tee -a "$site_log_file"
+    return 0
+  fi
+
+  local domain_prefix="${domain_name%%.*}"
+  local db_dump="${site_stage_dir}/${domain_prefix}_db_$(date +'%Y-%m-%d').sql"
+  local archive_path="${site_stage_dir}/${domain_name}_$(date +'%Y-%m-%d').tar.gz"
+
+  echo "Creating database dump..." >> "$site_log_file"
+  if ! mysqldump -u "$db_user" -p"$db_pass" --no-tablespaces "$db_name" > "$db_dump" 2>"$mysql_warn_file"; then
+    echo "✗ Database dump failed for $domain_name" | tee -a "$site_log_file"
+    return 0
+  fi
+
+  echo "✓ Database dump successful ($(du -h "$db_dump" | cut -f1) size)" | tee -a "$site_log_file"
+
+  echo "Creating backup archive..." >> "$site_log_file"
+  # Create archive from site files + DB dump + site log
+  # We stage db_dump + log in site_stage_dir, so we can pack everything reliably in one tar call.
+  if ! tar -czf "$archive_path" \
+      -C "$dir" "wp-content" "wp-config.php" \
+      -C "$site_stage_dir" "$(basename "$db_dump")" "$(basename "$site_log_file")"; then
+    echo "✗ Archive creation failed for $domain_name" | tee -a "$site_log_file"
+    return 0
+  fi
+
+  echo "✓ Archive created: $(basename "$archive_path") ($(du -h "$archive_path" | cut -f1) size)" | tee -a "$site_log_file"
+  echo "Uploading to S3..." >> "$site_log_file"
+
+  if ! rclone copy $RCLONE_FLAGS "$archive_path" "$FULL_REMOTE_PATH" --progress >"$rclone_out_file" 2>&1; then
+    echo "✗ rclone upload failed for $domain_name (see $rclone_out_file)" | tee -a "$site_log_file"
+    return 0
+  fi
+
+  # Verify upload (skip in dry-run)
+  if [ "$DRYRUN" = false ]; then
+    if rclone ls "${FULL_REMOTE_PATH}/$(basename "$archive_path")" >/dev/null 2>&1; then
+      echo "✓ Successfully uploaded to S3" | tee -a "$site_log_file"
+
+      echo "✓ Keeping local copy in $LOCAL_BACKUP_DIR" | tee -a "$site_log_file"
+      cp -f "$archive_path" "$LOCAL_BACKUP_DIR/" || echo "WARN: Could not copy local backup" | tee -a "$site_log_file"
     else
-        echo "✗ Database dump failed for $DOMAIN_NAME" | tee -a "$SITE_LOG_FILE"
+      echo "✗ Failed to verify upload to S3" | tee -a "$site_log_file"
+      return 0
     fi
-    
-    echo "Completed processing $DOMAIN_NAME"
+  fi
+
+  echo "Backup process for $domain_name completed at $(date)" >> "$site_log_file"
+  log "Completed processing $domain_name"
+  return 0
 }
 
-# Perform backups
-echo "Backup process started at $(date)"
+# ---------- Main ----------
+log "Backup process started"
 
-# Create local backup directory if it doesn't exist
-mkdir -p "$LOCAL_BACKUP_DIR"
-
-# Remove previous day's backups from local backup directory
-# Clean up old backups before starting new ones
+# Local retention: keep only today's local backups (same behavior you had)
 if [ "$DRYRUN" = false ]; then
-    echo "Cleaning up old local backups..."
-    # Keep only today's backups, delete everything else
-    todays_date=$(date +'%Y-%m-%d')
-    find "$LOCAL_BACKUP_DIR" -type f -name "*.tar.gz" | while read file; do
-        if [[ "$(basename "$file")" != *"_${todays_date}.tar.gz" ]]; then
-            echo "Deleting old backup: $(basename "$file")"
-            rm -f "$file"
-        else
-            echo "Keeping today's backup: $(basename "$file")"
-        fi
-    done
-    echo "Local cleanup complete."
-    
-    # Clean up any stray backup archives in /root from previous runs
-    echo "Cleaning up stray archives in /root..."
-    find /root -maxdepth 1 -name "*.tar.gz" -type f -mtime +0 -delete 2>/dev/null || true
-fi
-
-# Check if we're only backing up a specific site
-if [ -n "$SPECIFIC_SITE" ]; then
-    # Find the directory for the specified site
-    SITE_DIR=""
-    for dir in "$BASE_DIR"/*/ ; do
-        if [ "$(basename "$dir")" = "$SPECIFIC_SITE" ] && [ -f "${dir}wp-config.php" ]; then
-            SITE_DIR="$dir"
-            break
-        fi
-    done
-    
-    if [ -n "$SITE_DIR" ]; then
-        backup_site "$SITE_DIR"
+  log "Cleaning up old local backups..."
+  todays_date="$(date +'%Y-%m-%d')"
+  find "$LOCAL_BACKUP_DIR" -type f -name "*.tar.gz" 2>/dev/null | while read -r file; do
+    if [[ "$(basename "$file")" != *"_${todays_date}.tar.gz" ]]; then
+      log "Deleting old backup: $(basename "$file")"
+      rm -f "$file" || true
     else
-        echo "Error: WordPress site $SPECIFIC_SITE not found in $BASE_DIR or wp-config.php missing."
-        exit 1
+      log "Keeping today's backup: $(basename "$file")"
     fi
+  done
+  log "Local cleanup complete."
+
+  # Extra safety: if anything ever drops tarballs into /root, remove ones older than today
+  find /root -maxdepth 1 -name "*.tar.gz" -type f -mtime +0 -delete 2>/dev/null || true
+fi
+
+# Run backup(s)
+if [ -n "$SPECIFIC_SITE" ]; then
+  SITE_DIR=""
+  for dir in "$BASE_DIR"/*/; do
+    if [ "$(basename "$dir")" = "$SPECIFIC_SITE" ] && [ -f "${dir%/}/wp-config.php" ]; then
+      SITE_DIR="$dir"
+      break
+    fi
+  done
+
+  if [ -n "$SITE_DIR" ]; then
+    backup_site "$SITE_DIR"
+  else
+    echo "Error: WordPress site $SPECIFIC_SITE not found in $BASE_DIR or wp-config.php missing."
+    exit 1
+  fi
 else
-    # Loop through all WordPress installations
-    for dir in "$BASE_DIR"/*/ ; do
-        if [ -f "${dir}wp-config.php" ]; then
-            backup_site "$dir"
-        fi
-    done
+  for dir in "$BASE_DIR"/*/; do
+    if [ -f "${dir%/}/wp-config.php" ]; then
+      backup_site "$dir"
+    fi
+  done
 fi
 
-# Clean up temp directory
-rm -rf "$TEMP_DIR"
-
-# Only run retention policy if we're doing a full backup
+# Retention policy on S3 folders only for full run
 if [ -z "$SPECIFIC_SITE" ]; then
-    apply_retention_policy
+  apply_retention_policy
 fi
 
-echo "Backup process completed successfully at $(date)"
+log "Backup process completed successfully"
 EOF
