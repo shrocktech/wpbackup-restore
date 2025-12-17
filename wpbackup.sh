@@ -1,4 +1,3 @@
-cat > /usr/local/bin/wpbackup << 'EOF'
 #!/bin/bash
 
 # WordPress Backup Script with S3 Integration (hardened)
@@ -325,4 +324,3 @@ if [ -z "$SPECIFIC_SITE" ]; then
 fi
 
 log "Backup process completed successfully"
-EOF
