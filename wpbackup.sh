@@ -238,12 +238,28 @@ backup_site() {
   echo "✓ Database dump successful ($(du -h "$db_dump" | cut -f1) size)" | tee -a "$site_log_file"
 
   echo "Creating backup archive..." >> "$site_log_file"
+  
   # Create archive from site files + DB dump + site log
   # We stage db_dump + log in site_stage_dir, so we can pack everything reliably in one tar call.
-  if ! tar -czf "$archive_path" \
+  # Note: tar exit code 1 means "file changed as we read it" - archive is still valid
+  set +e
+  tar -czf "$archive_path" \
       -C "$dir" "wp-content" "wp-config.php" \
-      -C "$site_stage_dir" "$(basename "$db_dump")" "$(basename "$site_log_file")"; then
-    echo "✗ Archive creation failed for $domain_name" | tee -a "$site_log_file"
+      -C "$site_stage_dir" "$(basename "$db_dump")" "$(basename "$site_log_file")" 2>&1
+  tar_exit=$?
+  set -e
+
+  # Exit code 1 = "file changed as we read it" - archive is still valid
+  if [ $tar_exit -gt 1 ]; then
+    echo "✗ Archive creation failed for $domain_name (tar exit code: $tar_exit)" | tee -a "$site_log_file"
+    return 0
+  elif [ $tar_exit -eq 1 ]; then
+    echo "⚠ Archive created with warnings for $domain_name (files changed during backup)" | tee -a "$site_log_file"
+  fi
+
+  # Verify archive was actually created
+  if [ ! -f "$archive_path" ] || [ ! -s "$archive_path" ]; then
+    echo "✗ Archive creation failed for $domain_name (file missing or empty)" | tee -a "$site_log_file"
     return 0
   fi
 
